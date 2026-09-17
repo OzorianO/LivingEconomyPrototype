@@ -1,0 +1,25 @@
+# Unity generated files, including nested Unity projects
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Bb]uild/
+[Bb]uilds/
+[Mm]emoryCaptures/
+.vs/
+.idea/
+bin/
+obj/
+*.csproj.user
+*.sln.docstates
+*.pidb
+*.booproj
+*.unityproj
+*.suo
+*.user
+*.userprefs
+.DS_Store
+Thumbs.db
+
+# Keep Assets (including .meta), Packages and ProjectSettings tracked.
