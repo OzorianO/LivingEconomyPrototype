@@ -1,0 +1,1 @@
+PASS: 215 lifecycle checks. Actual domain reload, rollback, blocked-route animation, repeated Play and Load passed. Search-index startup errors excluded: 0.

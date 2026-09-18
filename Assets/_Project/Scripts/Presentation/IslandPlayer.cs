@@ -33,6 +33,7 @@ namespace LivingEconomy.Presentation
 
         public void SetExploring(bool value)
         {
+            if (value && settlement != null && settlement.HeroDead) value = false;
             Exploring = value;
             RefreshBodyVisibility();
             if (settlement != null) settlement.CloseInteraction();
@@ -88,6 +89,7 @@ namespace LivingEconomy.Presentation
         private void Update()
         {
             if (controller == null || ground == null || followCamera == null) return;
+            if (settlement.HeroDead) { if (Exploring) SetExploring(false); return; }
             var keyboard = Keyboard.current;
             if (keyboard != null && keyboard.tabKey.wasPressedThisFrame) SetExploring(!Exploring);
             if (!Exploring) return;
@@ -126,7 +128,7 @@ namespace LivingEconomy.Presentation
         // Separate from input polling so collision/movement can be verified in Unity.
         public void MoveExplorer(Vector3 direction, bool running, bool jump, float dt)
         {
-            if (controller == null || !Exploring || dt <= 0) return;
+            if (controller == null || !Exploring || dt <= 0 || settlement != null && settlement.HeroDead) return;
             if (settlement != null && settlement.InteractionOpen) { direction = Vector3.zero; jump = false; }
             direction.y = 0; direction = Vector3.ClampMagnitude(direction, 1);
             var displacement = direction * (running ? 6 : 3.5f) * Mathf.Min(dt, 0.05f);

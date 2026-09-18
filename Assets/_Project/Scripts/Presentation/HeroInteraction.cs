@@ -97,6 +97,18 @@ namespace LivingEconomy.Presentation
             return Perform(AgentAction.ConsumeBread);
         }
 
+        public bool Loot(Good? good, bool takeMoney)
+        {
+            if (!IsOpen || !CanReach(openedId) || preview?.Simulation?.Hero == null) return false;
+            var selected = Account(openedId);
+            if (selected == null || !selected.IsAgent || !selected.IsDead) return false;
+            var result = preview.Simulation.Loot(preview.Simulation.Hero.Id, openedId, good,
+                good.HasValue ? 1 : 0, takeMoney, true);
+            actionMessage = result.Success ? "Personal property transferred from body." : result.Reason;
+            preview.RememberCompletedDay();
+            return result.Success;
+        }
+
         private bool Perform(AgentAction action)
         {
             var result = preview.Simulation.ExecuteAction(preview.Simulation.Hero.Id, action);
@@ -136,7 +148,7 @@ namespace LivingEconomy.Presentation
                 var id = NearestId(); var account = Account(id);
                 if (account == null) return;
                 var rect = new Rect(x, Mathf.Max(115, Screen.height - 70), width, 55);
-                if (GUI.Button(rect, "E: " + (id == "farm" || id == "bakery" ? "Inspect " : "Talk to ") + account.Name)) TryOpen(id);
+                if (GUI.Button(rect, "E: " + (account.IsDead ? "Loot body: " : id == "farm" || id == "bakery" ? "Inspect " : "Talk to ") + account.Name)) TryOpen(id);
                 return;
             }
             var selected = Account(openedId);
@@ -148,6 +160,7 @@ namespace LivingEconomy.Presentation
             if (openedId == "farm" || openedId == "bakery")
             {
                 var business = preview.Simulation.Business(openedId);
+                if (selected.Suspended) GUILayout.Label("SUSPENDED: owner dead. Business funds/stock are not body loot.");
                 GUILayout.Label($"Owner: {Account(business.Owner)?.Name ?? business.Owner}");
                 GUILayout.Label($"Employees: {preview.Simulation.EmployeeCount(openedId)}/{business.Capacity} | wage: {business.Wage} coins/day");
                 GUILayout.Label($"Business capital: {selected.Money} | grain: {selected.Stock(Good.Grain)} | bread: {selected.Stock(Good.Bread)}");
@@ -160,11 +173,21 @@ namespace LivingEconomy.Presentation
             }
             else
             {
+                if (selected.IsDead)
+                {
+                    GUILayout.Label($"BODY: personal coins {selected.Money} | grain {selected.Stock(Good.Grain)} | bread {selected.Stock(Good.Bread)}");
+                    if (GUILayout.Button("Take 1 bread")) Loot(Good.Bread, false);
+                    if (GUILayout.Button("Take 1 grain")) Loot(Good.Grain, false);
+                    if (GUILayout.Button("Take remaining personal coins")) Loot(null, true);
+                }
+                else
+                {
                 string job = preview.Simulation.EmployerOf(openedId);
                 GUILayout.Label($"Job: {job ?? "unemployed"} | hunger: {selected.Hunger}/100");
                 GUILayout.Label($"Coins: {selected.Money} | bread carried: {selected.Stock(Good.Bread)}");
                 GUILayout.Label("Current decision: " + preview.Simulation.DecisionOf(openedId));
                 GUILayout.Label("Information only: branching conversations and quests are not implemented yet.");
+                }
             }
             GUILayout.EndScrollView();
             if (GUILayout.Button("Close (E / Escape)")) Close();

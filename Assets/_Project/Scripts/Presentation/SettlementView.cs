@@ -23,6 +23,7 @@ namespace LivingEconomy.Presentation
             position = Vector3.zero; return false;
         }
         public IslandPlayer Player => player;
+        public bool HeroDead => preview?.Simulation?.Hero?.IsDead == true;
         [SerializeField, HideInInspector] private Vector3 cameraFocus = new Vector3(0, 0, 1);
         [SerializeField, HideInInspector] private float cameraYaw = -25, cameraPitch = 43, cameraDistance = 70;
         private readonly Dictionary<GameObject, string> targets = new Dictionary<GameObject, string>();
@@ -205,6 +206,7 @@ namespace LivingEconomy.Presentation
         private static float ZoomDistance(float distance, float scroll) => OverviewCameraController.ZoomDistance(distance, scroll);
         private Material ResidentMaterial(Resident npc)
         {
+            if (npc.IsDead) return unemployedColor;
             if (npc.Hunger > 0) return hungryColor;
             if (preview.Simulation.IsOwner(npc.Id)) return ownerColor;
             string employer = preview.Simulation.EmployerOf(npc.Id);

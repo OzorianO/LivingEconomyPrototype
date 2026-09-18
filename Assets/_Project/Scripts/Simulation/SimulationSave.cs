@@ -19,6 +19,7 @@ namespace LivingEconomy.Simulation
         public List<SavedJob> Jobs = new List<SavedJob>();
         public List<SavedEntry> Ledger = new List<SavedEntry>();
         public SavedHeroPose HeroPose;
+        public bool HeroEnabled;
     }
     [Serializable]
     public sealed class SavedHeroPose
@@ -38,11 +39,25 @@ namespace LivingEconomy.Simulation
         }
     }
     [Serializable]
+    public sealed class SavedPoint
+    {
+        public float X, Y, Z;
+        public SavedPoint Copy() => (SavedPoint)MemberwiseClone();
+        public void Validate()
+        {
+            foreach (float value in new[] { X, Y, Z })
+                if (float.IsNaN(value) || float.IsInfinity(value) || Math.Abs(value) > 100000)
+                    throw new ArgumentException("Invalid world position.");
+        }
+    }
+    [Serializable]
     public sealed class SavedAccount
     {
         public string Id, Name;
         public int Profession, Grain, Bread, Hunger, Thirst;
         public long Money;
+        public bool IsDead;
+        public SavedPoint DeathPoint;
     }
     [Serializable]
     public sealed class SavedBusiness { public string Id, Owner; public int Capacity; public long Wage; }

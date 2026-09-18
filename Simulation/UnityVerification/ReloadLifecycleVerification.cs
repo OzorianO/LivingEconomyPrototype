@@ -54,7 +54,7 @@ public static class ReloadLifecycleVerification
                 foreach (var capsule in child.GetComponentsInChildren<CapsuleCollider>())
                     if (capsule.enabled) people++;
             }
-        Check(roots == 1 && people == 20, "one generated world with twenty residents");
+        Check(roots == 1 && people == 20 - SettlementReport.Capture(preview.Simulation).Dead, "one generated world with expected living NPC colliders");
         var view = preview.GetComponent<SettlementView>();
         var camera = (Camera)typeof(SettlementView).GetField("mapCamera", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(view);
         Check(camera != null && !camera.orthographic && Mathf.Abs(camera.fieldOfView - 50) < 0.01f, "perspective camera is active");
@@ -225,6 +225,38 @@ public static class ReloadLifecycleVerification
         Check(preview.Simulation.Hero.Money == coins, "pose changes never create or lose hero money");
         player.SetExploring(false);
     }
+    private static void CheckDeathLoot(SimulationPreview preview)
+    {
+        string original = SimulationSave.ToXml(preview.Simulation);
+        var demo = DailySimulation.HeroDemo();
+        Check(demo.ExecuteAction("npc-01", AgentAction.BuyBread).Success, "corpse fixture purchases personal bread");
+        Check(demo.KillAgent("npc-01", new SavedPoint { X = -1, Y = 0.8f, Z = -2 }).Success, "corpse fixture performs death transition");
+        Call(preview, "ResetScenario", demo);
+        var view = preview.GetComponent<SettlementView>(); var player = view.Player; var interaction = view.Interaction;
+        player.SetExploring(true); player.TeleportToSpawn(); Physics.SyncTransforms();
+        Check(view.TryPersonPosition("npc-01", out var bodyPoint) && Mathf.Abs(bodyPoint.x + 1) < 0.001f, "corpse view restored at recorded death position");
+        Check(interaction.TryOpen("npc-01") && interaction.Loot(Good.Bread, false), "nearby corpse interaction transfers actual bread");
+        long coins = preview.Simulation.Agent("npc-01").Money; long heroCoins = preview.Simulation.Hero.Money;
+        Check(interaction.Loot(null, true) && preview.Simulation.Hero.Money == heroCoins + coins, "nearby corpse interaction transfers personal wallet");
+        Check(!interaction.Loot(null, true) && !interaction.Loot(Good.Bread, false), "corpse interaction cannot refill empty loot");
+        string saved = SimulationSave.ToXml(preview.Simulation);
+        Call(preview, "ResetScenario", SimulationSave.FromXml(saved));
+        Check(preview.Simulation.Agent("npc-01").IsDead && preview.Simulation.Agent("npc-01").Money == 0
+            && preview.Simulation.Hero.Stock(Good.Bread) == 1, "Unity Load preserves death and emptied corpse");
+        var people = (System.Collections.Generic.Dictionary<string, Renderer>)typeof(SettlementView).GetField("people", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(view);
+        Check(!people["npc-01"].GetComponent<CapsuleCollider>().enabled, "corpse collider does not block walking agents");
+        var corpsePosition = people["npc-01"].transform.position;
+        preview.Simulation.Step(); view.ResetWalking();
+        Check(Vector3.Distance(people["npc-01"].transform.position, corpsePosition) < 0.001f
+            && preview.Simulation.Agent("npc-01").Money == 0, "day advance neither moves corpse nor pays it wages");
+        Check(SettlementReport.Capture(preview.Simulation).MoneyConserved, "Unity corpse wallet report conserves all coins");
+        Check(preview.Simulation.KillAgent("hero", new SavedPoint()).Success, "hero supports same death transition in Unity");
+        typeof(IslandPlayer).GetMethod("Update", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(player, null);
+        var start = player.transform.position; player.SetExploring(true); player.MoveExplorer(Vector3.right, true, true, 0.05f);
+        Check(!player.Exploring && player.transform.position == start, "dead hero cannot re-enable movement");
+        Call(preview, "ResetScenario", SimulationSave.FromXml(original));
+        player.SetExploring(false);
+    }
     private static void Update()
     {
         if (!SessionState.GetBool(Prefix + "Running", false)) return;
@@ -238,6 +270,7 @@ public static class ReloadLifecycleVerification
                 var preview = Preview(); CheckWorld(preview);
                 Call(preview, "ResetScenario", DailySimulation.HeroDemo());
                 Check(preview.Simulation.ExecuteAction("hero", AgentAction.BuyBread).Success, "prepare carried hero bread before actual domain reload");
+                Check(preview.Simulation.KillAgent("npc-02", new SavedPoint { X = -1, Y = 0.8f, Z = -2 }).Success, "prepare corpse before actual domain reload");
                 for (int i = 0; i < 5; i++) preview.Simulation.Step();
                 preview.Simulation.AssignJob("npc-01", null, out _);
                 preview.RememberCompletedDay();
@@ -245,7 +278,7 @@ public static class ReloadLifecycleVerification
                 Call(preview, "AdvanceDay");
                 foreach (var npc in preview.Simulation.Economy.Residents) preview.Simulation.ArriveAtWork(npc.Id);
                 preview.Simulation.FinishWork();
-                Check(preview.Simulation.LastPaid == 18, "partial day changed wages before reload");
+                Check(preview.Simulation.LastPaid == 17, "partial day changed living wages before reload");
                 SessionState.SetInt(Prefix + "Step", 1);
                 SessionState.SetInt(Prefix + "RequestedDomain", SessionState.GetInt(Prefix + "Domain", 0));
                 EditorUtility.RequestScriptReload();
@@ -259,6 +292,7 @@ public static class ReloadLifecycleVerification
                 if (preview.Simulation == null || preview.Simulation.DayInProgress) return;
                 Check(preview.Simulation.Economy.Tick == 5, "actual domain reload rolled back interrupted day");
                 Check(SimulationSave.ToXml(preview.Simulation) == SessionState.GetString(Prefix + "Expected", ""), "actual reload preserves exact completed economy and jobs");
+                Check(preview.Simulation.Agent("npc-02").IsDead, "actual domain reload preserves corpse state");
                 CheckWorld(preview);
                 var view = preview.GetComponent<SettlementView>();
                 view.SetRouteBlocked("farm", true);
@@ -282,6 +316,7 @@ public static class ReloadLifecycleVerification
                 var preview = Preview();
                 if (preview.Simulation == null) return;
                 Check(SimulationSave.ToXml(preview.Simulation) == SessionState.GetString(Prefix + "Completed", ""), "actual completed-day reload preserves exact state");
+                Check(preview.Simulation.Agent("npc-02").IsDead, "completed-day reload preserves corpse state");
                 CheckWorld(preview);
                 SessionState.SetInt(Prefix + "Step", 4); EditorApplication.ExitPlaymode(); return;
             }
@@ -293,7 +328,7 @@ public static class ReloadLifecycleVerification
             if (step == 5)
             {
                 if (!EditorApplication.isPlaying) return;
-                var preview = Preview(); CheckWorld(preview); CheckPresentation(preview); CheckHeroEconomy(preview); CheckHeroPose(preview);
+                var preview = Preview(); CheckWorld(preview); CheckPresentation(preview); CheckHeroEconomy(preview); CheckHeroPose(preview); CheckDeathLoot(preview);
                 Check(preview.Simulation.Economy.Tick == 0, "second Play starts fresh without duplicate UI");
                 Call(preview, "ResetScenario", SimulationSave.FromXml(SessionState.GetString(Prefix + "Expected", "")));
                 Check(preview.Simulation.Economy.Tick == 5, "load after repeated Play restores snapshot");

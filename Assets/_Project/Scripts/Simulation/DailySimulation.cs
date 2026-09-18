@@ -12,6 +12,28 @@ namespace LivingEconomy.Simulation
         public Resident Farm { get; }
         public Resident Bakery { get; }
         public Resident Hero { get; private set; }
+        public Resident Agent(string id) => id == null ? null : Hero?.Id == id ? Hero : FindResident(id);
+        public bool BusinessActive(string id)
+        {
+            var business = Business(id);
+            return business != null && Agent(business.Owner)?.IsDead == false;
+        }
+        public LedgerEntry KillAgent(string id, SavedPoint position)
+        {
+            if (DayInProgress) return Economy.RefuseAction(id, "Wait until the day finishes");
+            if (Agent(id) == null) return Economy.RefuseAction(id, "Unknown agent");
+            var result = Economy.KillAgent(Agent(id), position);
+            if (result.Success) ApplyDeathPolicy();
+            return result;
+        }
+        private void ApplyDeathPolicy()
+        {
+            Farm.Suspended = !BusinessActive(Farm.Id); Bakery.Suspended = !BusinessActive(Bakery.Id);
+            foreach (var job in new Dictionary<string, string>(jobs))
+                if (Agent(job.Key)?.IsDead == true || !BusinessActive(job.Value)) jobs.Remove(job.Key);
+        }
+        public LedgerEntry Loot(string actorId, string corpseId, Good? good, int quantity, bool takeMoney, bool accessGranted)
+            => Economy.Loot(actorId, corpseId, good, quantity, takeMoney, accessGranted);
         private SavedHeroPose heroPose;
         public SavedHeroPose HeroPose => heroPose?.Copy();
         public void SetHeroPose(SavedHeroPose pose)
@@ -34,6 +56,7 @@ namespace LivingEconomy.Simulation
         {
             if (actorId == null || (FindResident(actorId) == null && (Hero == null || Hero.Id != actorId)))
                 return Economy.RefuseAction(actorId, "Unknown agent");
+            if (Agent(actorId).IsDead) return Economy.RefuseAction(actorId, "Agent is dead");
             if (action == AgentAction.BuyBread) return Economy.Buy(actorId, Bakery.Id, Good.Bread, 1, 6);
             if (action == AgentAction.ConsumeBread) return Economy.ConsumeBread(actorId);
             return Economy.RefuseAction(actorId, "Unknown action");
@@ -129,8 +152,10 @@ namespace LivingEconomy.Simulation
             reason = null;
             if (DayInProgress) reason = "Wait until the day finishes.";
             else if (FindResident(resident) == null) reason = "Unknown resident.";
+            else if (Agent(resident).IsDead) reason = "Agent is dead.";
             else if (IsOwner(resident)) reason = "Business owners already have work.";
             else if (employer != null && Business(employer) == null) reason = "Unknown business.";
+            else if (employer != null && !BusinessActive(employer)) reason = "Business suspended after owner death.";
             else if (employer != null && EmployerOf(resident) != employer && EmployeeCount(employer) >= Business(employer).Capacity)
                 reason = "No vacancy.";
             if (reason != null) return false;
@@ -168,11 +193,13 @@ namespace LivingEconomy.Simulation
         {
             foreach (var npc in Priority(Economy.Tick))
             {
+                if (npc.IsDead) continue;
                 if (EmployerOf(npc.Id) != null) continue;
                 BusinessDefinition best = null;
                 bool vacancy = false;
                 foreach (var business in Businesses)
                 {
+                    if (!BusinessActive(business.Id)) continue;
                     if (EmployeeCount(business.Id) >= business.Capacity) continue;
                     vacancy = true;
                     var account = business.Id == Farm.Id ? Farm : Bakery;
@@ -196,6 +223,9 @@ namespace LivingEconomy.Simulation
             if (AutoEmployment) SeekJobs();
             worked.Clear(); shopped.Clear(); ate.Clear(); bakingCapacity = 0;
             failedWork.Clear(); failedShopping.Clear(); failedHome.Clear();
+            // Dead agents resolve all phase bookkeeping without pretending to arrive.
+            foreach (var npc in Economy.Residents)
+                if (npc.IsDead) { worked.Add(npc.Id); shopped.Add(npc.Id); ate.Add(npc.Id); }
             workFinished = false; shoppingFinished = false; DayInProgress = true;
         }
 
@@ -207,11 +237,12 @@ namespace LivingEconomy.Simulation
 
         public bool ArriveAtWork(string id)
         {
-            return DayInProgress && !workFinished && FindResident(id) != null && worked.Add(id);
+            return DayInProgress && !workFinished && FindResident(id) != null && !Agent(id).IsDead && worked.Add(id);
         }
 
         private void SettleWork(Resident npc)
         {
+            if (npc.IsDead) return;
             string id = npc.Id;
             if (failedWork.TryGetValue(id, out var failure))
             {
@@ -221,6 +252,7 @@ namespace LivingEconomy.Simulation
             bool owner = IsOwner(id);
             string employer = EmployerOf(id);
             if (employer == null) return;
+            if (!BusinessActive(employer)) return;
             if (!owner)
             {
                 if (Business(employer).Wage > 0 && !Economy.Transfer(employer, id, Business(employer).Wage, "Daily wage after work arrivals").Success)
@@ -252,7 +284,7 @@ namespace LivingEconomy.Simulation
 
         public bool ArriveAtBakery(string id)
         {
-            return DayInProgress && workFinished && !shoppingFinished && FindResident(id) != null && shopped.Add(id);
+            return DayInProgress && workFinished && !shoppingFinished && FindResident(id) != null && !Agent(id).IsDead && shopped.Add(id);
         }
 
         public bool FinishShopping()
@@ -260,6 +292,7 @@ namespace LivingEconomy.Simulation
             if (!DayInProgress || !workFinished || shoppingFinished || shopped.Count != Economy.Residents.Count) return false;
             foreach (var npc in Priority(Economy.Tick))
             {
+                if (npc.IsDead) continue;
                 if (failedShopping.TryGetValue(npc.Id, out var failure))
                     Economy.Note("Unreachable", npc.Id, Bakery.Id, false, failure);
                 else if (npc.Stock(Good.Bread) == 0) ExecuteAction(npc.Id, AgentAction.BuyBread);
@@ -271,7 +304,7 @@ namespace LivingEconomy.Simulation
         public bool ArriveAtHome(string id)
         {
             var npc = FindResident(id);
-            return DayInProgress && shoppingFinished && npc != null && ate.Add(id);
+            return DayInProgress && shoppingFinished && npc != null && !npc.IsDead && ate.Add(id);
         }
 
         // Failure resolves one attempt, without inventing an arrival or duplicating an action.
@@ -293,8 +326,11 @@ namespace LivingEconomy.Simulation
         {
             if (!DayInProgress || !shoppingFinished || ate.Count != Economy.Residents.Count) return false;
             foreach (var npc in Priority(Economy.Tick))
+            {
+                if (npc.IsDead) continue;
                 if (failedHome.TryGetValue(npc.Id, out var failure)) Economy.MissMeal(npc, failure);
                 else if (Economy.Eat(npc)) LastFed++;
+            }
             DrawProfit(Farm, Businesses[0].Owner); DrawProfit(Bakery, Businesses[1].Owner);
             if (Hero != null) Economy.AdvanceNeeds(Hero, 10, 10);
             DayInProgress = false;
@@ -313,6 +349,7 @@ namespace LivingEconomy.Simulation
         }
         private void DrawProfit(Resident business, string owner)
         {
+            if (!BusinessActive(business.Id)) return;
             long amount = Math.Min(6, Math.Max(0, business.Money - reserve));
             if (amount > 0) Economy.Transfer(business.Id, owner, amount, "Owner profit above working reserve");
         }
@@ -326,8 +363,11 @@ namespace LivingEconomy.Simulation
             if (Hero != null) accounts.Add(Hero);
             foreach (var a in accounts)
                 data.Accounts.Add(new SavedAccount { Id = a.Id, Name = a.Name, Profession = (int)a.Profession,
-                    Money = a.Money, Grain = a.Stock(Good.Grain), Bread = a.Stock(Good.Bread), Hunger = a.Hunger, Thirst = a.Thirst });
+                    Money = a.Money, Grain = a.Stock(Good.Grain), Bread = a.Stock(Good.Bread), Hunger = a.Hunger, Thirst = a.Thirst,
+                    IsDead = a.IsDead, DeathPoint = a.DeathPoint });
             data.Version = Hero == null ? 3 : heroPose == null ? 4 : 5; data.AutoEmployment = AutoEmployment;
+            foreach (var account in accounts) if (account.IsDead) data.Version = 6;
+            data.HeroEnabled = Hero != null;
             data.HeroPose = heroPose?.Copy();
             data.LastUnpaid = LastUnpaid; data.LastUnreachable = LastUnreachable;
             foreach (var b in Businesses) data.Businesses.Add(new SavedBusiness { Id = b.Id, Owner = b.Owner, Capacity = b.Capacity, Wage = b.Wage });
@@ -341,7 +381,7 @@ namespace LivingEconomy.Simulation
 
         public static DailySimulation FromSave(SaveData data)
         {
-            if (data == null || (data.Version < 1 || data.Version > 5) || data.Jobs == null || data.LastPaid < 0 || data.LastPaid > 18
+            if (data == null || (data.Version < 1 || data.Version > 6) || data.Jobs == null || data.LastPaid < 0 || data.LastPaid > 18
                 || data.LastFed < 0 || data.LastFed > 20 || data.LastBread < 0 || data.LastBread > 40)
                 throw new ArgumentException("Unsupported or invalid save.");
             if (data.LastUnpaid < 0 || data.LastUnpaid > 18 || data.LastUnreachable < 0 || data.LastUnreachable > 60)
@@ -359,8 +399,8 @@ namespace LivingEconomy.Simulation
             }
             var restored = new DailySimulation(farmYield: data.FarmYield, capital: data.Reserve, businesses: definitions,
                 autoEmployment: data.Version >= 3 && data.AutoEmployment);
-            if (data.Version >= 4) restored.EnableHero();
-            if (data.Version == 5)
+            if ((data.Version >= 4 && data.Version <= 5) || (data.Version == 6 && data.HeroEnabled)) restored.EnableHero();
+            if (data.Version == 5 || (data.Version == 6 && data.HeroPose != null))
             {
                 if (data.HeroPose == null) throw new ArgumentException("Missing v5 hero pose.");
                 restored.SetHeroPose(data.HeroPose);
@@ -383,6 +423,16 @@ namespace LivingEconomy.Simulation
                         a.Name = a.Id == "farm" ? "Farm" : "Bakery";
                     }
             restored.Economy.Restore(data);
+            if (data.Version < 6)
+                foreach (var account in data.Accounts) if (account.IsDead || account.DeathPoint != null)
+                    throw new ArgumentException("Death state requires v6.");
+            if (data.Version == 6)
+            {
+                foreach (var job in restored.jobs)
+                    if (restored.Agent(job.Key).IsDead || !restored.BusinessActive(job.Value))
+                        throw new ArgumentException("Saved job belongs to dead agent or suspended business.");
+                restored.ApplyDeathPolicy();
+            }
             restored.LastPaid = data.LastPaid; restored.LastFed = data.LastFed; restored.LastBread = data.LastBread;
             restored.LastUnpaid = data.LastUnpaid; restored.LastUnreachable = data.LastUnreachable;
             foreach (var entry in restored.Economy.Ledger)

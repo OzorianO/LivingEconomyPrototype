@@ -154,6 +154,15 @@ namespace LivingEconomy.Presentation
                 ResetScenario(demo);
             }
             if (GUILayout.Button("Hero economy demo (test scenario)")) ResetScenario(DailySimulation.HeroDemo());
+            if (GUILayout.Button("Death / loot demo (test scenario)"))
+            {
+                var demo = DailySimulation.HeroDemo();
+                demo.ExecuteAction("npc-01", AgentAction.BuyBread);
+                var point = new SavedPoint { X = -9.55f, Y = 0.8f, Z = -3.5f };
+                demo.KillAgent("npc-01", point);
+                ResetScenario(demo);
+            }
+            if (simulation.Hero.IsDead) GUILayout.Label("Hero is dead: no movement/actions. Use Reset for a new test session.");
             GUILayout.BeginHorizontal();
             autoDays = GUILayout.Toggle(autoDays, "Auto days");
             settlement.Paused = GUILayout.Toggle(settlement.Paused, "Pause walking");
@@ -211,12 +220,13 @@ namespace LivingEconomy.Presentation
                 reportDayInProgress = simulation.DayInProgress;
             }
             GUILayout.Label(report.DayInProgress ? "Economy snapshot (day in progress)" : "Economy report (completed day)");
-            GUILayout.Label($"Hungry: {report.Hungry}/{report.Residents} | severe (75+): {report.SevereHunger}");
+            GUILayout.Label($"Living NPCs: {report.Residents - report.Dead}/{report.Residents} | bodies: {report.Dead}");
+            GUILayout.Label($"Hungry: {report.Hungry}/{report.Residents - report.Dead} | severe (75+): {report.SevereHunger}");
             GUILayout.Label($"Jobs: {report.Employees} | owners: {report.Owners} | unemployed: {report.Unemployed} | vacancies: {report.Vacancies}");
             GUILayout.Label($"Failed job searches today: {report.JobSearchRefusals} | unpaid: {report.Unpaid}");
             GUILayout.Label($"Food refusals today: no stock {report.FoodStockRefusals}, no money {report.FoodMoneyRefusals}");
             GUILayout.Label($"Stocks (all accounts): grain {report.Grain}, bread {report.Bread}");
-            GUILayout.Label($"Coins: NPC wallets {report.ResidentMoney}, hero {report.HeroMoney}, businesses {report.BusinessMoney} | conserved: {report.MoneyConserved}");
+            GUILayout.Label($"Coins: NPC personal (incl. bodies) {report.ResidentMoney}, hero {report.HeroMoney}, businesses {report.BusinessMoney} | conserved: {report.MoneyConserved}");
             GUILayout.Label($"Wallets: min {report.MinimumWallet}, median {report.MedianWallet:0.0}, mean {report.AverageWallet:0.0}, max {report.MaximumWallet}");
             GUILayout.Label($"Poorest: {report.Poorest} | richest: {report.Richest}");
             GUILayout.Label($"Top 20% hold {report.TopFifthWalletShare:0.0}% of wallet coins (business capital excluded)");

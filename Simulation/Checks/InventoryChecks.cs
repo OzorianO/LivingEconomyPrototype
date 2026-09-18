@@ -6,6 +6,7 @@ static class InventoryChecks
 {
     public static void Run(Action<bool, string> check)
     {
+        DeathChecks(check);
         HeroChecks(check);
         var catalog = ItemCatalog.Prototype;
         check(catalog.TryGet("grain", out var grain) && grain.MaxStack == 100, "stable grain catalog ID");
@@ -149,6 +150,98 @@ static class InventoryChecks
         }
         finally { if (System.IO.File.Exists(path)) System.IO.File.Delete(path); }
     }
+    static void DeathChecks(Action<bool, string> check)
+    {
+        var demo = DailySimulation.HeroDemo();
+        var npc = demo.Agent("npc-01");
+        check(demo.ExecuteAction(npc.Id, AgentAction.BuyBread).Success, "death fixture buys real personal bread");
+        long wallet = npc.Money; int stock = npc.Stock(Good.Bread);
+        var point = new SavedPoint { X = -9.55f, Y = 0.8f, Z = -3.5f };
+        check(demo.KillAgent(npc.Id, point).Success && npc.IsDead && npc.Money == wallet && npc.Stock(Good.Bread) == stock, "death keeps personal property on same account");
+        point.X = 99;
+        check(npc.DeathPoint.X == -9.55f, "death position input copied");
+        var readPoint = npc.DeathPoint; readPoint.X = 99;
+        check(npc.DeathPoint.X == -9.55f, "death position output copied");
+        check(!demo.KillAgent(npc.Id, point).Success && demo.EmployerOf(npc.Id) == null, "death idempotent and removes employee job");
+        check(!demo.ExecuteAction(npc.Id, AgentAction.BuyBread).Success && !demo.ExecuteAction(npc.Id, AgentAction.ConsumeBread).Success, "dead agent commands refused");
+        check(!demo.Economy.Transfer(npc.Id, "hero", 1, "Bypass").Success && !demo.Economy.Transfer("hero", npc.Id, 1, "Gift").Success, "dead wallet blocks ordinary transfers both directions");
+        check(!demo.Economy.Produce(npc.Id, Good.Grain, 1).Success && !demo.Economy.TransferGoods(npc.Id, "hero", Good.Bread, 1, true).Success, "dead stock blocks normal production or transfer bypass");
+        string before = Property(demo);
+        check(!demo.Loot("hero", npc.Id, Good.Bread, 1, true, false).Success && Property(demo) == before, "denied combined loot atomic");
+        check(!demo.Loot("hero", "npc-02", null, 0, true, true).Success && Property(demo) == before, "cannot loot living agent");
+        check(!demo.Loot("hero", "bakery", null, 0, true, true).Success && Property(demo) == before, "cannot loot business capital");
+        check(!demo.Loot(npc.Id, "hero", null, 0, true, true).Success, "dead looter cannot act");
+        check(!demo.Loot("hero", npc.Id, (Good)99, 1, true, true).Success && Property(demo) == before, "invalid loot item atomic");
+        check(!demo.Loot("hero", npc.Id, Good.Bread, -1, true, true).Success && Property(demo) == before, "negative loot atomic");
+        check(!demo.Loot("hero", npc.Id, Good.Bread, 2, true, true).Success && Property(demo) == before, "insufficient item leaves corpse coins intact");
+        demo.Hero.Store.TryAdd("grain", 40, out _); before = Property(demo);
+        check(!demo.Loot("hero", npc.Id, Good.Bread, 1, true, true).Success && Property(demo) == before, "capacity failure leaves coins and items intact");
+        demo.Hero.Store.TryRemove("grain", 40, out _);
+        long playerWallet = demo.Hero.Money;
+        check(demo.Loot("hero", npc.Id, Good.Bread, 1, true, true).Success
+            && demo.Hero.Money == playerWallet + wallet && demo.Hero.Stock(Good.Bread) == 1
+            && npc.Money == 0 && npc.Stock(Good.Bread) == 0, "combined loot moves exact existing property");
+        before = Property(demo);
+        check(!demo.Loot("hero", npc.Id, null, 0, true, true).Success && !demo.Loot("hero", npc.Id, Good.Bread, 1, false, true).Success
+            && Property(demo) == before, "empty corpse cannot be looted twice");
+        check(demo.Economy.TotalMoney() == 1642 && SettlementReport.Capture(demo).MoneyConserved, "loot and corpse report conserve money");
+        string xml = SimulationSave.ToXml(demo);
+        var loaded = SimulationSave.FromXml(xml);
+        check(loaded.Capture().Version == 6 && loaded.Agent(npc.Id).IsDead && loaded.Agent(npc.Id).DeathPoint.X == -9.55f, "v6 death position roundtrip");
+        check(SimulationSave.ToXml(loaded) == xml && !loaded.Loot("hero", npc.Id, null, 0, true, true).Success, "Load does not refill looted corpse");
+        for (int i = 0; i < 100; i++) loaded.Step();
+        check(loaded.Agent(npc.Id).Money == 0 && loaded.Agent(npc.Id).Stock(Good.Bread) == 0 && loaded.LastPaid == 17, "dead NPC receives no wages or food in 100 days");
+        check(loaded.Economy.TotalMoney() == 1642 && SettlementReport.Capture(loaded).Dead == 1, "dead day stages complete and preserve conservation");
+        var ownerDemo = DailySimulation.HeroDemo(); var owner = ownerDemo.Agent(ownerDemo.Businesses[1].Owner);
+        long businessMoney = ownerDemo.Bakery.Money; int businessBread = ownerDemo.Bakery.Stock(Good.Bread);
+        check(ownerDemo.KillAgent(owner.Id, new SavedPoint { X = 7, Y = 0.8f, Z = -3.5f }).Success, "business owner can die without deleting business");
+        check(ownerDemo.Bakery.Suspended && ownerDemo.EmployeeCount("bakery") == 0 && !ownerDemo.BusinessActive("bakery"), "owner death suspends business and releases employees");
+        check(!ownerDemo.AssignJob("npc-02", "bakery", out _) && !ownerDemo.ExecuteAction("hero", AgentAction.BuyBread).Success, "suspended business rejects hiring and selling");
+        check(!ownerDemo.Economy.Transfer("bakery", "npc-02", 1, "Wage").Success && !ownerDemo.Economy.Produce("bakery", Good.Bread, 1).Success, "suspended business blocks payout and production");
+        check(ownerDemo.Loot("hero", owner.Id, null, 0, true, true).Success && ownerDemo.Bakery.Money == businessMoney
+            && ownerDemo.Bakery.Stock(Good.Bread) == businessBread, "owner body does not include business assets");
+        ownerDemo = SimulationSave.FromXml(SimulationSave.ToXml(ownerDemo));
+        check(ownerDemo.Bakery.Suspended && ownerDemo.EmployeeCount("bakery") == 0, "suspension derives correctly after Load");
+        for (int i = 0; i < 30; i++) ownerDemo.Step();
+        check(ownerDemo.Bakery.Money == businessMoney && ownerDemo.Bakery.Stock(Good.Bread) == businessBread && ownerDemo.LastPaid <= 9, "suspended business stays untouched for 30 days");
+        check(ownerDemo.Economy.TotalMoney() == 1642 && SettlementReport.Capture(ownerDemo).MoneyConserved, "owner death conservation includes frozen business");
+        var heroDead = DailySimulation.HeroDemo();
+        heroDead.ExecuteAction("hero", AgentAction.BuyBread);
+        check(heroDead.KillAgent("hero", new SavedPoint()).Success, "hero shares same death state");
+        check(heroDead.Loot("npc-01", "hero", Good.Bread, 1, true, true).Success && heroDead.Hero.Money == 0 && heroDead.Hero.Stock(Good.Bread) == 0, "NPC uses same corpse loot API for hero");
+        heroDead = SimulationSave.FromXml(SimulationSave.ToXml(heroDead));
+        check(heroDead.Hero.IsDead && !heroDead.ExecuteAction("hero", AgentAction.ConsumeBread).Success, "hero death and no action survive Load");
+        heroDead.Step(); check(heroDead.Hero.Hunger == 50 && heroDead.Hero.Thirst == 20, "dead hero needs do not keep advancing");
+        var noHero = new DailySimulation();
+        noHero.KillAgent("npc-01", new SavedPoint());
+        check(SimulationSave.FromXml(SimulationSave.ToXml(noHero)).Hero == null, "v6 NPC-only save does not invent hero");
+        var corrupt = demo.Capture(); corrupt.Accounts.Find(a => a.Id == npc.Id).DeathPoint = null;
+        Throws(() => DailySimulation.FromSave(corrupt), check, "missing death position refused");
+        corrupt = demo.Capture(); corrupt.Accounts.Find(a => a.Id == npc.Id).DeathPoint.X = float.NaN;
+        Throws(() => DailySimulation.FromSave(corrupt), check, "non-finite corpse position refused");
+        corrupt = demo.Capture(); corrupt.Accounts.Find(a => a.Id == "bakery").IsDead = true; corrupt.Accounts.Find(a => a.Id == "bakery").DeathPoint = new SavedPoint();
+        Throws(() => DailySimulation.FromSave(corrupt), check, "business cannot become corpse");
+        corrupt = demo.Capture(); corrupt.Jobs.Add(new SavedJob { Resident = npc.Id, Employer = "farm" });
+        Throws(() => DailySimulation.FromSave(corrupt), check, "dead saved employee refused");
+        corrupt = demo.Capture(); corrupt.Version = 4;
+        Throws(() => DailySimulation.FromSave(corrupt), check, "dead state cannot be downgraded to legacy save");
+        var activeDay = new DailySimulation(); activeDay.BeginDay();
+        check(!activeDay.KillAgent("npc-01", new SavedPoint()).Success && !activeDay.Agent("npc-01").IsDead, "death transition restricted to completed day boundary");
+        check(!demo.KillAgent("bakery", new SavedPoint()).Success && !demo.KillAgent("missing", new SavedPoint()).Success, "unknown or business death refused");
+        check(!demo.KillAgent("npc-02", new SavedPoint { X = float.NaN }).Success && !demo.Agent("npc-02").IsDead, "invalid death point atomic");
+        var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "death-check-" + Guid.NewGuid() + ".xml");
+        try { SimulationSave.Write(path, loaded); check(SimulationSave.Read(path).Agent(npc.Id).IsDead, "v6 disk state persists death"); }
+        finally { if (System.IO.File.Exists(path)) System.IO.File.Delete(path); }
+    }
+
+    static string Property(DailySimulation simulation)
+    {
+        string state = "";
+        foreach (var npc in simulation.Economy.Residents) state += $"{npc.Id}:{npc.Money}:{npc.Stock(Good.Grain)}:{npc.Stock(Good.Bread)};";
+        if (simulation.Hero != null) state += $"hero:{simulation.Hero.Money}:{simulation.Hero.Stock(Good.Grain)}:{simulation.Hero.Stock(Good.Bread)};";
+        return state + $"biz:{simulation.Farm.Money}:{simulation.Farm.Stock(Good.Grain)}:{simulation.Bakery.Money}:{simulation.Bakery.Stock(Good.Bread)}";
+    }
+
     static void PoseChecks(Action<bool, string> check)
     {
         var demo = DailySimulation.HeroDemo();

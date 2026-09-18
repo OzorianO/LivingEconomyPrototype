@@ -49,7 +49,15 @@ namespace LivingEconomy.Presentation
             Walking = false; Paused = false; phase = 0;
             foreach (var person in people)
             {
-                if (person.Value != null) person.Value.transform.position = homes[person.Key];
+                var agent = preview.Simulation.Agent(person.Key);
+                if (person.Value != null)
+                {
+                    var point = agent.DeathPoint;
+                    person.Value.transform.position = agent.IsDead ? new Vector3(point.X, point.Y - 0.45f, point.Z) : homes[person.Key];
+                    person.Value.transform.rotation = Quaternion.Euler(0, 0, agent.IsDead ? 90 : 0);
+                    var collider = person.Value.GetComponent<CapsuleCollider>();
+                    if (collider != null) collider.enabled = !agent.IsDead;
+                }
                 routes[person.Key].Clear();
             }
             travelTimes.Clear(); routeTargets.Clear();
@@ -60,6 +68,7 @@ namespace LivingEconomy.Presentation
             int farmIndex = 0, bakeryIndex = 0;
             foreach (var person in people)
             {
+                if (preview.Simulation.Agent(person.Key).IsDead) continue;
                 string employer = preview.Simulation.EmployerOf(person.Key);
                 if (employer == null)
                 {
@@ -82,6 +91,7 @@ namespace LivingEconomy.Presentation
         }
         private void SetRoute(string id, Vector3 destination, string target)
         {
+            if (preview.Simulation.Agent(id).IsDead) { routes[id].Clear(); return; }
             travelTimes[id] = 0; routeTargets[id] = target;
             if (people[id] == null || blockedTargets.Contains(target)
                 || float.IsNaN(destination.x) || float.IsInfinity(destination.x)

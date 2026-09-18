@@ -18,6 +18,12 @@ namespace LivingEconomy.Simulation
         public long Money { get; internal set; }
         public int Hunger { get; internal set; }
         public int Thirst { get; internal set; }
+        public bool IsDead { get; internal set; }
+        public bool Suspended { get; internal set; }
+        public bool IsAgent { get; internal set; } = true;
+        public bool CanOperate => !IsDead && !Suspended;
+        internal SavedPoint deathPoint;
+        public SavedPoint DeathPoint => deathPoint?.Copy();
         public IReadOnlyDictionary<Good, int> Inventory { get; }
 
         public Resident(string id, string name, Profession profession, long money, int grain, int bread)
@@ -120,6 +126,7 @@ namespace LivingEconomy.Simulation
         public Resident AddBusiness(string id, string name)
         {
             var account = new Resident(id, name, Profession.None, 0, 0, 0);
+            account.IsAgent = false;
             byId.Add(id, account);
             Record("Business", "scenario", id, null, 0, 0, true, "Separate business account");
             return account;
@@ -136,10 +143,47 @@ namespace LivingEconomy.Simulation
         internal LedgerEntry RefuseAction(string actor, string reason)
             => Record("Action", actor, actor, null, 0, 0, false, reason);
 
+        internal LedgerEntry KillAgent(Resident agent, SavedPoint position)
+        {
+            if (agent == null || !agent.IsAgent || !byId.TryGetValue(agent.Id, out var owned) || !ReferenceEquals(agent, owned))
+                return RefuseAction(agent?.Id, "Unknown agent");
+            if (agent.IsDead) return RefuseAction(agent.Id, "Agent already dead");
+            if (position == null) return RefuseAction(agent.Id, "Missing death position");
+            try { position.Validate(); }
+            catch (ArgumentException) { return RefuseAction(agent.Id, "Invalid death position"); }
+            agent.IsDead = true; agent.deathPoint = position.Copy();
+            return Record("Death", agent.Id, agent.Id, null, 0, 0, true, "Personal wallet and items remain on body");
+        }
+
+        // Single-threaded, preflight-first: items AND coins succeed together or neither changes.
+        public LedgerEntry Loot(string actorId, string corpseId, Good? good, int quantity, bool takeMoney, bool accessGranted)
+        {
+            var error = ValidateParties(actorId, corpseId, out var actor, out var corpse, false);
+            if (error == null && !accessGranted) error = "Access denied";
+            if (error == null && (!actor.IsAgent || !actor.CanOperate)) error = "Looter must be a living agent";
+            if (error == null && (!corpse.IsAgent || !corpse.IsDead)) error = "Target is not a corpse";
+            if (error == null && (good.HasValue ? !Enum.IsDefined(typeof(Good), good.Value) || quantity <= 0 : quantity != 0))
+                error = "Invalid loot quantity or item";
+            if (error == null && good.HasValue && corpse.Stock(good.Value) < quantity) error = "Insufficient stock";
+            if (error == null && good.HasValue) actor.Store.CanAdd(ItemCatalog.IdFor(good.Value), quantity, out error);
+            long amount = error == null && takeMoney ? corpse.Money : 0;
+            if (error == null && !good.HasValue && amount == 0) error = "Nothing to loot";
+            long balance = 0;
+            if (error == null)
+                try { balance = checked(actor.Money + amount); }
+                catch (OverflowException) { error = "Balance overflow"; }
+            if (error != null) return Record("Loot", corpseId, actorId, good, quantity, amount, false, error);
+            if (good.HasValue)
+                ItemInventory.TryTransfer(corpse.Store, actor.Store, ItemCatalog.IdFor(good.Value), quantity, true, out _);
+            corpse.Money -= amount; actor.Money = balance;
+            return Record("Loot", corpseId, actorId, good, quantity, amount, true, "Existing personal property transferred from body");
+        }
+
         public LedgerEntry ConsumeBread(string id)
         {
             if (id == null || !byId.TryGetValue(id, out var account))
                 return RefuseAction(id, "Unknown participant");
+            if (!account.IsAgent || !account.CanOperate) return RefuseAction(id, "Agent cannot act");
             if (account.Stock(Good.Bread) == 0)
                 return Record("Meal", id, "consumption", Good.Bread, 0, 0, false, "No food");
             account.SetStock(Good.Bread, account.Stock(Good.Bread) - 1);
@@ -151,6 +195,7 @@ namespace LivingEconomy.Simulation
         {
             if (account == null || !byId.TryGetValue(account.Id, out var owned) || !ReferenceEquals(account, owned)
                 || hunger < 0 || thirst < 0) throw new ArgumentException("Invalid needs update.");
+            if (account.IsDead) return;
             account.Hunger = (int)Math.Min(100L, (long)account.Hunger + hunger);
             account.Thirst = (int)Math.Min(100L, (long)account.Thirst + thirst);
             Note("Needs", account.Id, account.Id, true, "Hunger and thirst advanced");
@@ -161,6 +206,7 @@ namespace LivingEconomy.Simulation
             Resident account;
             string error = id == null || !byId.TryGetValue(id, out account) ? "Unknown participant" : null;
             account = error == null ? byId[id] : null;
+            if (error == null && !account.CanOperate) error = "Participant inactive";
             if (error == null && (!Enum.IsDefined(typeof(Good), output) || quantity <= 0
                 || (input.HasValue && (!Enum.IsDefined(typeof(Good), input.Value) || input == output)))) error = "Invalid recipe";
             if (error == null && input.HasValue && account.Stock(input.Value) < quantity) error = "Insufficient ingredients";
@@ -188,6 +234,7 @@ namespace LivingEconomy.Simulation
         public bool Eat(Resident resident)
         {
             if (resident == null || !residents.Contains(resident)) throw new ArgumentException("Unknown resident");
+            if (resident.IsDead) return false;
             bool fed = ConsumeBread(resident.Id).Success;
             if (!fed) resident.Hunger = Math.Min(100, resident.Hunger + 25);
             return fed;
@@ -198,6 +245,7 @@ namespace LivingEconomy.Simulation
 
         internal void MissMeal(Resident resident, string reason)
         {
+            if (resident.IsDead) return;
             resident.Hunger = Math.Min(100, resident.Hunger + 25);
             Record("Meal", resident.Id, "consumption", Good.Bread, 0, 0, false, reason);
         }
@@ -279,6 +327,9 @@ namespace LivingEconomy.Simulation
                     throw new ArgumentException("Invalid saved account.");
                 if (saved.Thirst < 0 || saved.Thirst > 100)
                     throw new ArgumentException("Invalid saved needs or inventory.");
+                if (saved.IsDead && (!account.IsAgent || saved.DeathPoint == null) || !saved.IsDead && saved.DeathPoint != null)
+                    throw new ArgumentException("Invalid saved death state.");
+                saved.DeathPoint?.Validate();
                 // Validate the combined capacity/slots before restoring any account.
                 var proposed = new ItemInventory(ItemCatalog.Prototype, account.Items.Capacity, account.Items.SlotCapacity);
                 if (saved.Grain > 0 && !proposed.TryAdd(ItemCatalog.GrainId, saved.Grain, out _)
@@ -300,6 +351,7 @@ namespace LivingEconomy.Simulation
             foreach (var saved in data.Accounts)
             {
                 var account = byId[saved.Id]; account.Money = saved.Money; account.Hunger = saved.Hunger; account.Thirst = saved.Thirst;
+                account.IsDead = saved.IsDead; account.deathPoint = saved.DeathPoint?.Copy();
                 account.SetStock(Good.Grain, 0); account.SetStock(Good.Bread, 0);
                 account.SetStock(Good.Grain, saved.Grain); account.SetStock(Good.Bread, saved.Bread);
             }
@@ -310,12 +362,13 @@ namespace LivingEconomy.Simulation
             Tick = data.Tick; InitialMoney = data.InitialMoney;
         }
 
-        private string ValidateParties(string from, string to, out Resident payer, out Resident receiver)
+        private string ValidateParties(string from, string to, out Resident payer, out Resident receiver, bool requireActive = true)
         {
             payer = null; receiver = null;
             if (from == null || to == null || !byId.TryGetValue(from, out payer) || !byId.TryGetValue(to, out receiver))
                 return "Unknown participant";
-            return from == to ? "Participants must differ" : null;
+            if (from == to) return "Participants must differ";
+            return requireActive && (!payer.CanOperate || !receiver.CanOperate) ? "Participant inactive" : null;
         }
 
         private LedgerEntry Record(string kind, string from, string to, Good? good, int quantity,

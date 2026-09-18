@@ -14,6 +14,7 @@ namespace LivingEconomy.Simulation
         public int Unemployed { get; private set; }
         public int Vacancies { get; private set; }
         public int Hungry { get; private set; }
+        public int Dead { get; private set; }
         public int SevereHunger { get; private set; }
         public int Unpaid { get; private set; }
         public int FailedRoutes { get; private set; }
@@ -51,6 +52,7 @@ namespace LivingEconomy.Simulation
             {
                 report.ResidentMoney = checked(report.ResidentMoney + npc.Money);
                 report.Grain += npc.Stock(Good.Grain); report.Bread += npc.Stock(Good.Bread);
+                if (npc.IsDead) { report.Dead++; continue; }
                 if (simulation.IsOwner(npc.Id)) report.Owners++;
                 else if (simulation.EmployerOf(npc.Id) == null) report.Unemployed++;
                 if (npc.Hunger > 0) report.Hungry++;
@@ -61,7 +63,7 @@ namespace LivingEconomy.Simulation
                 var account = business.Id == simulation.Farm.Id ? simulation.Farm : simulation.Bakery;
                 report.BusinessMoney = checked(report.BusinessMoney + account.Money);
                 report.Grain += account.Stock(Good.Grain); report.Bread += account.Stock(Good.Bread);
-                report.Vacancies += Math.Max(0, business.Capacity - simulation.EmployeeCount(business.Id));
+                if (simulation.BusinessActive(business.Id)) report.Vacancies += Math.Max(0, business.Capacity - simulation.EmployeeCount(business.Id));
             }
             if (simulation.Hero != null)
             {
