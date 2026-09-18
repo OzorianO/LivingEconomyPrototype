@@ -4,7 +4,7 @@ using UnityEngine.InputSystem;
 
 namespace LivingEconomy.Presentation
 {
-    // Read-only first interaction layer; transactions will use core commands later.
+    // Presentation validates reach; shared simulation commands own the actual transaction.
     [DisallowMultipleComponent]
     public sealed class HeroInteraction : MonoBehaviour
     {
@@ -13,6 +13,7 @@ namespace LivingEconomy.Presentation
         private Camera camera;
         private string openedId;
         private Vector2 scroll;
+        private string actionMessage = "Start with 0 coins. Hero economy demo is a separate test fixture.";
         public bool IsOpen => openedId != null;
         public string OpenedId => openedId;
         public const float Reach = 3;
@@ -83,6 +84,27 @@ namespace LivingEconomy.Presentation
         }
         public void Close() { openedId = null; }
 
+        public bool BuyBread()
+        {
+            if (openedId != "bakery" || !CanReach("bakery") || preview == null || preview.Simulation?.Hero == null)
+            { actionMessage = "Open the bakery interaction within reach first."; return false; }
+            return Perform(AgentAction.BuyBread);
+        }
+
+        public bool ConsumeBread()
+        {
+            if (view == null || view.Player == null || !view.Player.Exploring || preview?.Simulation?.Hero == null) return false;
+            return Perform(AgentAction.ConsumeBread);
+        }
+
+        private bool Perform(AgentAction action)
+        {
+            var result = preview.Simulation.ExecuteAction(preview.Simulation.Hero.Id, action);
+            actionMessage = result.Success ? (action == AgentAction.BuyBread ? "Bought 1 bread for 6 coins." : "Ate 1 bread; hunger reduced by 25.") : result.Reason;
+            preview.RememberCompletedDay();
+            return result.Success;
+        }
+
         private Resident Account(string id)
         {
             if (preview == null || preview.Simulation == null) return null;
@@ -97,6 +119,18 @@ namespace LivingEconomy.Presentation
             if (view == null || view.Player == null || !view.Player.Exploring || camera == null || preview.Simulation == null) return;
             float width = Mathf.Max(100, Mathf.Min(460, camera.pixelRect.width - 20));
             float x = camera.pixelRect.x + 10;
+            var hero = preview.Simulation.Hero;
+            if (hero != null)
+            {
+                GUILayout.BeginArea(new Rect(x, 115, width, 125), GUI.skin.box);
+                GUILayout.Label($"Hero: {hero.Money} coins | Bread: {hero.Items.Quantity(ItemCatalog.BreadId)} | Grain: {hero.Items.Quantity(ItemCatalog.GrainId)}");
+                GUILayout.Label($"Hunger: {hero.Hunger}/100 | Thirst: {hero.Thirst}/100 | Items: {hero.Items.TotalQuantity}/{hero.Items.Capacity}");
+                GUI.enabled = hero.Stock(Good.Bread) > 0;
+                if (GUILayout.Button("Eat 1 bread")) ConsumeBread();
+                GUI.enabled = true;
+                GUILayout.Label(actionMessage);
+                GUILayout.EndArea();
+            }
             if (!IsOpen)
             {
                 var id = NearestId(); var account = Account(id);
@@ -118,7 +152,11 @@ namespace LivingEconomy.Presentation
                 GUILayout.Label($"Employees: {preview.Simulation.EmployeeCount(openedId)}/{business.Capacity} | wage: {business.Wage} coins/day");
                 GUILayout.Label($"Business capital: {selected.Money} | grain: {selected.Stock(Good.Grain)} | bread: {selected.Stock(Good.Bread)}");
                 GUILayout.Label(openedId == "farm" ? "The farm produces grain and sells it to the bakery." : "The bakery buys grain, bakes bread and sells it to residents.");
-                GUILayout.Label("Hero employment and purchases will be added in the next steps.");
+                if (openedId == "bakery")
+                {
+                    if (GUILayout.Button("Buy 1 bread — 6 coins")) BuyBread();
+                    GUILayout.Label("Consumes real bakery stock. Employment is not implemented yet.");
+                }
             }
             else
             {

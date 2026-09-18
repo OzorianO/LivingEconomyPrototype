@@ -4,12 +4,46 @@ using System.Collections.Generic;
 namespace LivingEconomy.Simulation
 {
     public enum DayStage { Work, Shopping, Home }
+    public enum AgentAction { BuyBread, ConsumeBread }
 
     public sealed class DailySimulation
     {
         public Economy Economy { get; }
         public Resident Farm { get; }
         public Resident Bakery { get; }
+        public Resident Hero { get; private set; }
+        public Resident EnableHero()
+        {
+            if (Hero == null)
+            {
+                if (DayInProgress) throw new InvalidOperationException("Enable the hero between days.");
+                Hero = Economy.AddPlayer();
+            }
+            return Hero;
+        }
+
+        // Controllers choose commands; the simulation owns identity, recipe/price and mutation.
+        public LedgerEntry ExecuteAction(string actorId, AgentAction action)
+        {
+            if (actorId == null || (FindResident(actorId) == null && (Hero == null || Hero.Id != actorId)))
+                return Economy.RefuseAction(actorId, "Unknown agent");
+            if (action == AgentAction.BuyBread) return Economy.Buy(actorId, Bakery.Id, Good.Bread, 1, 6);
+            if (action == AgentAction.ConsumeBread) return Economy.ConsumeBread(actorId);
+            return Economy.RefuseAction(actorId, "Unknown action");
+        }
+
+        public static DailySimulation HeroDemo()
+        {
+            var demo = new DailySimulation();
+            demo.EnableHero();
+            // Explicit developer fixture, not free money or a gameplay quest.
+            demo.Economy.Transfer(demo.Businesses[1].Owner, demo.Hero.Id, 12, "Developer demo: owner gift");
+            demo.Economy.Produce(demo.Farm.Id, Good.Grain, 2);
+            demo.Economy.Buy(demo.Bakery.Id, demo.Farm.Id, Good.Grain, 2, 3);
+            demo.Economy.Produce(demo.Bakery.Id, Good.Bread, 2, Good.Grain);
+            demo.Economy.AdvanceNeeds(demo.Hero, 50, 20);
+            return demo;
+        }
         public IReadOnlyDictionary<string, string> Jobs { get; }
         public IReadOnlyList<BusinessDefinition> Businesses { get; }
         private readonly Dictionary<string, string> jobs = new Dictionary<string, string>();
@@ -221,7 +255,7 @@ namespace LivingEconomy.Simulation
             {
                 if (failedShopping.TryGetValue(npc.Id, out var failure))
                     Economy.Note("Unreachable", npc.Id, Bakery.Id, false, failure);
-                else if (npc.Stock(Good.Bread) == 0) Economy.Buy(npc.Id, Bakery.Id, Good.Bread, 1, 6);
+                else if (npc.Stock(Good.Bread) == 0) ExecuteAction(npc.Id, AgentAction.BuyBread);
             }
             shoppingFinished = true;
             return true;
@@ -255,6 +289,7 @@ namespace LivingEconomy.Simulation
                 if (failedHome.TryGetValue(npc.Id, out var failure)) Economy.MissMeal(npc, failure);
                 else if (Economy.Eat(npc)) LastFed++;
             DrawProfit(Farm, Businesses[0].Owner); DrawProfit(Bakery, Businesses[1].Owner);
+            if (Hero != null) Economy.AdvanceNeeds(Hero, 10, 10);
             DayInProgress = false;
             return true;
         }
@@ -281,10 +316,11 @@ namespace LivingEconomy.Simulation
             var data = new SaveData { Tick = Economy.Tick, InitialMoney = Economy.InitialMoney, Reserve = reserve,
                 FarmYield = farmYield, LastPaid = LastPaid, LastFed = LastFed, LastBread = LastBread };
             var accounts = new List<Resident>(Economy.Residents); accounts.Add(Farm); accounts.Add(Bakery);
+            if (Hero != null) accounts.Add(Hero);
             foreach (var a in accounts)
                 data.Accounts.Add(new SavedAccount { Id = a.Id, Name = a.Name, Profession = (int)a.Profession,
-                    Money = a.Money, Grain = a.Stock(Good.Grain), Bread = a.Stock(Good.Bread), Hunger = a.Hunger });
-            data.Version = 3; data.AutoEmployment = AutoEmployment;
+                    Money = a.Money, Grain = a.Stock(Good.Grain), Bread = a.Stock(Good.Bread), Hunger = a.Hunger, Thirst = a.Thirst });
+            data.Version = Hero == null ? 3 : 4; data.AutoEmployment = AutoEmployment;
             data.LastUnpaid = LastUnpaid; data.LastUnreachable = LastUnreachable;
             foreach (var b in Businesses) data.Businesses.Add(new SavedBusiness { Id = b.Id, Owner = b.Owner, Capacity = b.Capacity, Wage = b.Wage });
             foreach (var job in Jobs) data.Jobs.Add(new SavedJob { Resident = job.Key, Employer = job.Value });
@@ -297,7 +333,7 @@ namespace LivingEconomy.Simulation
 
         public static DailySimulation FromSave(SaveData data)
         {
-            if (data == null || (data.Version < 1 || data.Version > 3) || data.Jobs == null || data.LastPaid < 0 || data.LastPaid > 18
+            if (data == null || (data.Version < 1 || data.Version > 4) || data.Jobs == null || data.LastPaid < 0 || data.LastPaid > 18
                 || data.LastFed < 0 || data.LastFed > 20 || data.LastBread < 0 || data.LastBread > 40)
                 throw new ArgumentException("Unsupported or invalid save.");
             if (data.LastUnpaid < 0 || data.LastUnpaid > 18 || data.LastUnreachable < 0 || data.LastUnreachable > 60)
@@ -315,6 +351,7 @@ namespace LivingEconomy.Simulation
             }
             var restored = new DailySimulation(farmYield: data.FarmYield, capital: data.Reserve, businesses: definitions,
                 autoEmployment: data.Version >= 3 && data.AutoEmployment);
+            if (data.Version == 4) restored.EnableHero();
             var seen = new HashSet<string>();
             restored.jobs.Clear();
             foreach (var job in data.Jobs)

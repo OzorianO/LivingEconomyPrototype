@@ -23,7 +23,7 @@ namespace LivingEconomy.Simulation
     public sealed class SavedAccount
     {
         public string Id, Name;
-        public int Profession, Grain, Bread, Hunger;
+        public int Profession, Grain, Bread, Hunger, Thirst;
         public long Money;
     }
     [Serializable]

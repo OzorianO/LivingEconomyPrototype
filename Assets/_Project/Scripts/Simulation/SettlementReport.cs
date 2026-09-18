@@ -24,6 +24,7 @@ namespace LivingEconomy.Simulation
         public long InitialMoney { get; private set; }
         public long ResidentMoney { get; private set; }
         public long BusinessMoney { get; private set; }
+        public long HeroMoney { get; private set; }
         public long MinimumWallet { get; private set; }
         public long MaximumWallet { get; private set; }
         public decimal MedianWallet { get; private set; }
@@ -33,7 +34,7 @@ namespace LivingEconomy.Simulation
         public string Richest { get; private set; }
         public long Grain { get; private set; }
         public long Bread { get; private set; }
-        public bool MoneyConserved => TotalMoney == InitialMoney && TotalMoney == ResidentMoney + BusinessMoney;
+        public bool MoneyConserved => TotalMoney == InitialMoney && TotalMoney == ResidentMoney + BusinessMoney + HeroMoney;
 
         public static SettlementReport Capture(DailySimulation simulation)
         {
@@ -61,6 +62,11 @@ namespace LivingEconomy.Simulation
                 report.BusinessMoney = checked(report.BusinessMoney + account.Money);
                 report.Grain += account.Stock(Good.Grain); report.Bread += account.Stock(Good.Bread);
                 report.Vacancies += Math.Max(0, business.Capacity - simulation.EmployeeCount(business.Id));
+            }
+            if (simulation.Hero != null)
+            {
+                report.HeroMoney = simulation.Hero.Money;
+                report.Grain += simulation.Hero.Stock(Good.Grain); report.Bread += simulation.Hero.Stock(Good.Bread);
             }
             wallets.Sort((a, b) => a.Money != b.Money ? a.Money.CompareTo(b.Money) : string.CompareOrdinal(a.Id, b.Id));
             if (wallets.Count > 0)

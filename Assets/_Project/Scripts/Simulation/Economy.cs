@@ -17,16 +17,21 @@ namespace LivingEconomy.Simulation
         public Profession Profession { get; }
         public long Money { get; internal set; }
         public int Hunger { get; internal set; }
+        public int Thirst { get; internal set; }
         public IReadOnlyDictionary<Good, int> Inventory { get; }
 
         public Resident(string id, string name, Profession profession, long money, int grain, int bread)
+            : this(id, name, profession, money, grain, bread, long.MaxValue, int.MaxValue) { }
+
+        internal Resident(string id, string name, Profession profession, long money, int grain, int bread,
+            long capacity, int slots)
         {
             if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(name))
                 throw new ArgumentException("A resident needs an ID and name.");
             if (money < 0 || grain < 0 || bread < 0) throw new ArgumentOutOfRangeException();
             if (!Enum.IsDefined(typeof(Profession), profession)) throw new ArgumentException("Unknown profession.");
             Id = id; Name = name; Profession = profession; Money = money;
-            Store = new ItemInventory(ItemCatalog.Prototype);
+            Store = new ItemInventory(ItemCatalog.Prototype, capacity, slots);
             Store.SetQuantity(ItemCatalog.GrainId, grain); Store.SetQuantity(ItemCatalog.BreadId, bread);
             Inventory = new LegacyStockView(Store);
         }
@@ -99,7 +104,7 @@ namespace LivingEconomy.Simulation
                 if (source == null || byId.ContainsKey(source.Id)) throw new ArgumentException("Duplicate or missing resident.");
                 // Copy input so another economy cannot mutate our accounts.
                 var resident = new Resident(source.Id, source.Name, source.Profession, source.Money,
-                    source.Stock(Good.Grain), source.Stock(Good.Bread));
+                    source.Stock(Good.Grain), source.Stock(Good.Bread), source.Items.Capacity, source.Items.SlotCapacity);
                 total = checked(total + resident.Money);
                 byId.Add(resident.Id, resident); residents.Add(resident);
                 Record("Initial", "scenario", resident.Id, null, 0, resident.Money, true, "Starting wallet");
@@ -120,6 +125,37 @@ namespace LivingEconomy.Simulation
             return account;
         }
 
+        internal Resident AddPlayer()
+        {
+            var player = new Resident("hero", "Hero", Profession.None, 0, 0, 0, 40, 4);
+            byId.Add(player.Id, player);
+            Record("Player", "scenario", player.Id, null, 0, 0, true, "Zero starting wallet; no money created");
+            return player;
+        }
+
+        internal LedgerEntry RefuseAction(string actor, string reason)
+            => Record("Action", actor, actor, null, 0, 0, false, reason);
+
+        public LedgerEntry ConsumeBread(string id)
+        {
+            if (id == null || !byId.TryGetValue(id, out var account))
+                return RefuseAction(id, "Unknown participant");
+            if (account.Stock(Good.Bread) == 0)
+                return Record("Meal", id, "consumption", Good.Bread, 0, 0, false, "No food");
+            account.SetStock(Good.Bread, account.Stock(Good.Bread) - 1);
+            account.Hunger = Math.Max(0, account.Hunger - 25);
+            return Record("Meal", id, "consumption", Good.Bread, 1, 0, true, "Bread eaten");
+        }
+
+        internal void AdvanceNeeds(Resident account, int hunger, int thirst)
+        {
+            if (account == null || !byId.TryGetValue(account.Id, out var owned) || !ReferenceEquals(account, owned)
+                || hunger < 0 || thirst < 0) throw new ArgumentException("Invalid needs update.");
+            account.Hunger = (int)Math.Min(100L, (long)account.Hunger + hunger);
+            account.Thirst = (int)Math.Min(100L, (long)account.Thirst + thirst);
+            Note("Needs", account.Id, account.Id, true, "Hunger and thirst advanced");
+        }
+
         public LedgerEntry Produce(string id, Good output, int quantity, Good? input = null)
         {
             Resident account;
@@ -132,6 +168,13 @@ namespace LivingEconomy.Simulation
             if (error == null)
                 try { stock = checked(account.Stock(output) + quantity); }
                 catch (OverflowException) { error = "Stock overflow"; }
+            if (error == null && (account.Items.Capacity != long.MaxValue || account.Items.SlotCapacity != int.MaxValue))
+            {
+                var proposed = new ItemInventory(ItemCatalog.Prototype, account.Items.Capacity, account.Items.SlotCapacity);
+                foreach (var item in account.Items.Quantities) proposed.TryAdd(item.Key, item.Value, out _);
+                if (input.HasValue) proposed.TryRemove(ItemCatalog.IdFor(input.Value), quantity, out _);
+                proposed.TryAdd(ItemCatalog.IdFor(output), quantity, out error);
+            }
             if (error != null) return Record("Production", id, id, output, quantity, 0, false, error);
             if (input.HasValue)
             {
@@ -145,10 +188,8 @@ namespace LivingEconomy.Simulation
         public bool Eat(Resident resident)
         {
             if (resident == null || !residents.Contains(resident)) throw new ArgumentException("Unknown resident");
-            bool fed = resident.Stock(Good.Bread) > 0;
-            if (fed) resident.SetStock(Good.Bread, resident.Stock(Good.Bread) - 1);
-            resident.Hunger = fed ? Math.Max(0, resident.Hunger - 25) : Math.Min(100, resident.Hunger + 25);
-            Record("Meal", resident.Id, "consumption", Good.Bread, fed ? 1 : 0, 0, fed, fed ? "Bread eaten" : "No food");
+            bool fed = ConsumeBread(resident.Id).Success;
+            if (!fed) resident.Hunger = Math.Min(100, resident.Hunger + 25);
             return fed;
         }
 
@@ -236,6 +277,13 @@ namespace LivingEconomy.Simulation
                     || saved.Name != account.Name || saved.Profession != (int)account.Profession
                     || saved.Money < 0 || saved.Grain < 0 || saved.Bread < 0 || saved.Hunger < 0 || saved.Hunger > 100)
                     throw new ArgumentException("Invalid saved account.");
+                if (saved.Thirst < 0 || saved.Thirst > 100)
+                    throw new ArgumentException("Invalid saved needs or inventory.");
+                // Validate the combined capacity/slots before restoring any account.
+                var proposed = new ItemInventory(ItemCatalog.Prototype, account.Items.Capacity, account.Items.SlotCapacity);
+                if (saved.Grain > 0 && !proposed.TryAdd(ItemCatalog.GrainId, saved.Grain, out _)
+                    || saved.Bread > 0 && !proposed.TryAdd(ItemCatalog.BreadId, saved.Bread, out _))
+                    throw new ArgumentException("Invalid saved inventory capacity.");
                 total = checked(total + saved.Money);
             }
             if (total != data.InitialMoney) throw new ArgumentException("Saved money total does not match.");
@@ -251,7 +299,8 @@ namespace LivingEconomy.Simulation
             }
             foreach (var saved in data.Accounts)
             {
-                var account = byId[saved.Id]; account.Money = saved.Money; account.Hunger = saved.Hunger;
+                var account = byId[saved.Id]; account.Money = saved.Money; account.Hunger = saved.Hunger; account.Thirst = saved.Thirst;
+                account.SetStock(Good.Grain, 0); account.SetStock(Good.Bread, 0);
                 account.SetStock(Good.Grain, saved.Grain); account.SetStock(Good.Bread, saved.Bread);
             }
             ledger.Clear();

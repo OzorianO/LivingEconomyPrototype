@@ -6,6 +6,7 @@ static class InventoryChecks
 {
     public static void Run(Action<bool, string> check)
     {
+        HeroChecks(check);
         var catalog = ItemCatalog.Prototype;
         check(catalog.TryGet("grain", out var grain) && grain.MaxStack == 100, "stable grain catalog ID");
         check(catalog.TryGet("bread", out var bread) && bread.MaxStack == 20, "stable bread catalog ID");
@@ -83,6 +84,70 @@ static class InventoryChecks
     }
 
     static string State(ItemInventory inventory) => inventory.Quantity("grain") + ":" + inventory.Quantity("bread") + ":" + inventory.TotalQuantity + ":" + inventory.UsedSlots;
+    static void HeroChecks(Action<bool, string> check)
+    {
+        var simulation = new DailySimulation();
+        var hero = simulation.EnableHero();
+        check(ReferenceEquals(hero, simulation.EnableHero()) && hero.Money == 0 && hero.Items.TotalQuantity == 0, "hero activation idempotent and empty");
+        check(simulation.Economy.Residents.Count == 20 && simulation.Economy.TotalMoney() == 1642, "hero not an automated NPC or new money");
+        check(!simulation.ExecuteAction("hero", AgentAction.BuyBread).Success && hero.Money == 0, "zero-wallet purchase refused");
+        check(!simulation.ExecuteAction("hero", AgentAction.ConsumeBread).Success && hero.Hunger == 0, "empty consume does not mutate needs");
+        check(!simulation.ExecuteAction("bakery", AgentAction.ConsumeBread).Success, "business cannot execute agent command");
+        check(!simulation.ExecuteAction(null, AgentAction.BuyBread).Success && !simulation.ExecuteAction("hero", (AgentAction)99).Success, "invalid agent commands refused");
+        var demo = DailySimulation.HeroDemo();
+        hero = demo.Hero;
+        check(hero.Money == 12 && hero.Hunger == 50 && hero.Thirst == 20 && demo.Bakery.Stock(Good.Bread) == 2, "developer demo funded wallet and actual bread");
+        check(demo.Economy.TotalMoney() == 1642 && demo.Economy.InitialMoney == 1642 && SettlementReport.Capture(demo).MoneyConserved, "demo and report money conserved");
+        check(demo.ExecuteAction("hero", AgentAction.BuyBread).Success && hero.Money == 6 && hero.Stock(Good.Bread) == 1 && demo.Bakery.Stock(Good.Bread) == 1, "hero command purchases real stock");
+        check(demo.ExecuteAction("hero", AgentAction.ConsumeBread).Success && hero.Hunger == 25 && hero.Thirst == 20 && hero.Stock(Good.Bread) == 0, "hero consume one item reduces only hunger");
+        check(!demo.ExecuteAction("hero", AgentAction.ConsumeBread).Success && hero.Hunger == 25, "repeat consume cannot duplicate effects");
+        string xml = SimulationSave.ToXml(demo);
+        var loaded = SimulationSave.FromXml(xml);
+        check(loaded.Capture().Version == 4 && loaded.Hero.Money == 6 && loaded.Hero.Hunger == 25 && loaded.Hero.Thirst == 20, "XML v4 hero wallet and needs roundtrip");
+        check(SimulationSave.ToXml(loaded) == xml, "hero exact XML roundtrip");
+        check(loaded.ExecuteAction("hero", AgentAction.BuyBread).Success && loaded.Hero.Stock(Good.Bread) == 1, "loaded hero can continue command");
+        loaded = SimulationSave.FromXml(SimulationSave.ToXml(loaded));
+        check(loaded.Hero.Money == 0 && loaded.Hero.Stock(Good.Bread) == 1 && loaded.Hero.Items.Capacity == 40, "carried bread and capacity roundtrip");
+        check(!loaded.ExecuteAction("hero", AgentAction.BuyBread).Success && loaded.Hero.Stock(Good.Bread) == 1, "loaded insufficient money leaves inventory intact");
+        var capacity = DailySimulation.HeroDemo();
+        capacity.Hero.Store.TryAdd("grain", 40, out _);
+        long coins = capacity.Bakery.Money;
+        check(!capacity.ExecuteAction("hero", AgentAction.BuyBread).Success && capacity.Hero.Money == 12 && capacity.Bakery.Money == coins && capacity.Bakery.Stock(Good.Bread) == 2, "hero capacity failure leaves money and stock intact");
+        check(!capacity.Economy.Produce("hero", Good.Bread, 1).Success && capacity.Hero.Items.TotalQuantity == 40, "production capacity failure atomic");
+        check(capacity.Economy.Produce("hero", Good.Bread, 1, Good.Grain).Success && capacity.Hero.Items.TotalQuantity == 40, "recipe checks final capacity after ingredients");
+        var npc = demo.Economy.Residents[1];
+        check(demo.ExecuteAction(npc.Id, AgentAction.BuyBread).Success && npc.Stock(Good.Bread) == 1, "NPC uses same buy command as hero");
+        demo.Economy.AdvanceNeeds(npc, 50, 20);
+        check(demo.ExecuteAction(npc.Id, AgentAction.ConsumeBread).Success && npc.Hunger == 25 && npc.Thirst == 20, "NPC uses same consume and needs API");
+        for (int v = 1; v <= 3; v++)
+        {
+            var old = new DailySimulation().Capture(); old.Version = v;
+            var migrated = DailySimulation.FromSave(old); migrated.EnableHero();
+            check(migrated.Hero.Money == 0 && migrated.Hero.Items.TotalQuantity == 0 && migrated.Economy.TotalMoney() == old.InitialMoney, "legacy save adds empty hero without invented property");
+        }
+        var corrupted = demo.Capture();
+        corrupted.Accounts.Find(a => a.Id == "hero").Thirst = 101;
+        Throws(() => DailySimulation.FromSave(corrupted), check, "corrupt hero needs refused");
+        corrupted = demo.Capture(); corrupted.Accounts.Find(a => a.Id == "hero").Grain = 41;
+        Throws(() => DailySimulation.FromSave(corrupted), check, "corrupt hero capacity refused");
+        corrupted = demo.Capture(); corrupted.Accounts.RemoveAll(a => a.Id == "hero");
+        Throws(() => DailySimulation.FromSave(corrupted), check, "missing v4 hero refused");
+        var checkpoint = new ReloadCheckpoint(); checkpoint.Remember(demo);
+        demo.BeginDay(); demo.ExecuteAction("hero", AgentAction.ConsumeBread); checkpoint.Remember(demo);
+        check(SimulationSave.ToXml(checkpoint.Restore()) == checkpoint.Xml, "partial day rollback includes hero");
+        var baseline = new DailySimulation(); baseline.EnableHero();
+        for (int i = 0; i < 100; i++) baseline.Step();
+        check(baseline.LastPaid == 18 && baseline.LastFed == 20 && baseline.Economy.TotalMoney() == 1642, "zero-wallet hero preserves NPC 100-day baseline");
+        check(baseline.Hero.Hunger == 100 && baseline.Hero.Thirst == 100, "hero needs advance once per finished day and clamp");
+        var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "hero-check-" + Guid.NewGuid() + ".xml");
+        try
+        {
+            SimulationSave.Write(path, loaded);
+            var disk = SimulationSave.Read(path);
+            check(disk.Hero.Money == loaded.Hero.Money && disk.Hero.Stock(Good.Bread) == 1 && disk.Hero.Thirst == loaded.Hero.Thirst, "hero disk save/load preserves wallet items needs");
+        }
+        finally { if (System.IO.File.Exists(path)) System.IO.File.Delete(path); }
+    }
     static void CheckRejected(ItemInventory from, ItemInventory to, string id, int amount, bool access, Action<bool, string> check, string label)
     {
         string old = State(from) + "/" + State(to);

@@ -162,6 +162,30 @@ public static class ReloadLifecycleVerification
         }
         Call(preview, "ResetScenario", SimulationSave.FromXml(original));
     }
+    private static void CheckHeroEconomy(SimulationPreview preview)
+    {
+        string original = SimulationSave.ToXml(preview.Simulation);
+        Call(preview, "ResetScenario", DailySimulation.HeroDemo());
+        var view = preview.GetComponent<SettlementView>();
+        var player = view.Player; var interaction = view.Interaction;
+        player.SetExploring(true); player.TeleportToSpawn();
+        string before = SimulationSave.ToXml(preview.Simulation);
+        Check(!interaction.BuyBread() && SimulationSave.ToXml(preview.Simulation) == before, "hero cannot buy remotely or without open bakery");
+        var cc = player.GetComponent<CharacterController>(); cc.enabled = false;
+        player.transform.position = new Vector3(7, 0.08f, 2.8f); cc.enabled = true; Physics.SyncTransforms();
+        Check(interaction.TryOpen("bakery") && interaction.BuyBread(), "reachable bakery interaction executes purchase");
+        var hero = preview.Simulation.Hero;
+        Check(hero.Money == 6 && hero.Stock(Good.Bread) == 1 && preview.Simulation.Bakery.Stock(Good.Bread) == 1, "Unity purchase delivers stock and charges exactly once");
+        Check(interaction.ConsumeBread() && hero.Hunger == 25 && hero.Thirst == 20, "Unity consume uses shared needs and inventory");
+        Check(!interaction.ConsumeBread() && hero.Hunger == 25, "Unity repeated consume has no duplicate effect");
+        Check(interaction.BuyBread() && hero.Money == 0 && hero.Stock(Good.Bread) == 1, "Unity second purchase carries saved bread");
+        before = SimulationSave.ToXml(preview.Simulation);
+        Call(preview, "ResetScenario", SimulationSave.FromXml(before));
+        Check(SimulationSave.ToXml(preview.Simulation) == before && preview.Simulation.Hero.Stock(Good.Bread) == 1, "Unity Load restores hero wallet inventory and needs");
+        Check(SettlementReport.Capture(preview.Simulation).MoneyConserved, "Unity report includes hero funds without new money");
+        Call(preview, "ResetScenario", SimulationSave.FromXml(original));
+        player.SetExploring(false);
+    }
     private static void Update()
     {
         if (!SessionState.GetBool(Prefix + "Running", false)) return;
@@ -173,6 +197,8 @@ public static class ReloadLifecycleVerification
             {
                 if (!EditorApplication.isPlaying || EditorApplication.isCompiling) return;
                 var preview = Preview(); CheckWorld(preview);
+                Call(preview, "ResetScenario", DailySimulation.HeroDemo());
+                Check(preview.Simulation.ExecuteAction("hero", AgentAction.BuyBread).Success, "prepare carried hero bread before actual domain reload");
                 for (int i = 0; i < 5; i++) preview.Simulation.Step();
                 preview.Simulation.AssignJob("npc-01", null, out _);
                 preview.RememberCompletedDay();
@@ -228,7 +254,7 @@ public static class ReloadLifecycleVerification
             if (step == 5)
             {
                 if (!EditorApplication.isPlaying) return;
-                var preview = Preview(); CheckWorld(preview); CheckPresentation(preview);
+                var preview = Preview(); CheckWorld(preview); CheckPresentation(preview); CheckHeroEconomy(preview);
                 Check(preview.Simulation.Economy.Tick == 0, "second Play starts fresh without duplicate UI");
                 Call(preview, "ResetScenario", SimulationSave.FromXml(SessionState.GetString(Prefix + "Expected", "")));
                 Check(preview.Simulation.Economy.Tick == 5, "load after repeated Play restores snapshot");
