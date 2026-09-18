@@ -9,7 +9,16 @@ Unity 6.6 (`6000.6.1f1`), Universal 3D. Малий острів, поселен�
 Відкрити `Assets/_Project/Scenes/MainSimulation.unity`, натиснути Play та клікнути Game.
 Острів, будівлі, NPC й герой генеруються під час Play із коду, а не з окремих збережених префабів.
 
-## Головний персонаж
+## Windows-збірка
+
+Unity: `Living Economy > Build Windows`. Команда перевіряє, що єдиною
+увімкненою сценою є MainSimulation, і створює `Builds/Windows/LivingEconomyPrototype.exe`.
+Для запуску потрібна вся папка Windows разом із Data та DLL.
+Це development-збірка для перевірок. Поточні результати та обмеження:
+[стабілізація](Docs/STABILIZATION.md). Автоматичні тести економіки налаштовані
+у `.github/workflows/simulation-checks.yml` для push і pull request.
+
+## Керування героєм
 
 WASD — ходьба відносно камери; Shift — біг; Space — стрибок.
 Права кнопка + перетягування — камера; колесо — наближення.

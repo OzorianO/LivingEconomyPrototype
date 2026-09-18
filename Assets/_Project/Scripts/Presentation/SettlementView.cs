@@ -308,8 +308,9 @@ namespace LivingEconomy.Presentation
 
         private Material ColorMaterial(Color color)
         {
-            var shader = Shader.Find("Universal Render Pipeline/Lit");
-            var material = new Material(shader); material.color = color;
+            var template = Resources.Load<Material>("IslandSurface");
+            if (template == null) throw new System.InvalidOperationException("Missing Resources/IslandSurface material.");
+            var material = new Material(template); material.color = color;
             materials.Add(material); return material;
         }
         private GameObject Shape(string name, PrimitiveType type, Vector3 position, Vector3 scale, Material material)
