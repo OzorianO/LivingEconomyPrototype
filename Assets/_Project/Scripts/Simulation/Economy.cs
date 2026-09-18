@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections;
 
 namespace LivingEconomy.Simulation
 {
@@ -9,7 +10,8 @@ namespace LivingEconomy.Simulation
 
     public sealed class Resident
     {
-        private readonly Dictionary<Good, int> inventory = new Dictionary<Good, int>();
+        internal ItemInventory Store { get; }
+        public IReadOnlyItemInventory Items => Store.ReadOnly;
         public string Id { get; }
         public string Name { get; }
         public Profession Profession { get; }
@@ -24,12 +26,35 @@ namespace LivingEconomy.Simulation
             if (money < 0 || grain < 0 || bread < 0) throw new ArgumentOutOfRangeException();
             if (!Enum.IsDefined(typeof(Profession), profession)) throw new ArgumentException("Unknown profession.");
             Id = id; Name = name; Profession = profession; Money = money;
-            inventory[Good.Grain] = grain; inventory[Good.Bread] = bread;
-            Inventory = new ReadOnlyDictionary<Good, int>(inventory);
+            Store = new ItemInventory(ItemCatalog.Prototype);
+            Store.SetQuantity(ItemCatalog.GrainId, grain); Store.SetQuantity(ItemCatalog.BreadId, bread);
+            Inventory = new LegacyStockView(Store);
         }
 
-        public int Stock(Good good) => inventory.TryGetValue(good, out var amount) ? amount : 0;
-        internal void SetStock(Good good, int amount) => inventory[good] = amount;
+        public int Stock(Good good) => Enum.IsDefined(typeof(Good), good) ? Store.Quantity(ItemCatalog.IdFor(good)) : 0;
+        internal void SetStock(Good good, int amount) => Store.SetQuantity(ItemCatalog.IdFor(good), amount);
+
+        // Compatibility projection, not a second copy of stock. Existing UI and XML v3
+        // keep reading Grain/Bread while the authoritative storage uses stable item IDs.
+        private sealed class LegacyStockView : IReadOnlyDictionary<Good, int>
+        {
+            private readonly ItemInventory store;
+            public LegacyStockView(ItemInventory store) { this.store = store; }
+            public int Count => 2;
+            public IEnumerable<Good> Keys { get { yield return Good.Grain; yield return Good.Bread; } }
+            public IEnumerable<int> Values { get { foreach (var key in Keys) yield return this[key]; } }
+            public int this[Good key] => store.Quantity(ItemCatalog.IdFor(key));
+            public bool ContainsKey(Good key) => Enum.IsDefined(typeof(Good), key);
+            public bool TryGetValue(Good key, out int value)
+            {
+                value = ContainsKey(key) ? this[key] : 0; return ContainsKey(key);
+            }
+            public IEnumerator<KeyValuePair<Good, int>> GetEnumerator()
+            {
+                foreach (var key in Keys) yield return new KeyValuePair<Good, int>(key, this[key]);
+            }
+            IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+        }
     }
 
     public sealed class LedgerEntry
@@ -172,10 +197,24 @@ namespace LivingEconomy.Simulation
             }
             if (error == null && buyer.Money < amount) error = "Insufficient money";
             if (error == null && seller.Stock(good) < quantity) error = "Insufficient stock";
+            if (error == null && !buyer.Store.CanAdd(ItemCatalog.IdFor(good), quantity, out error))
+                return Record("Purchase", buyerId, sellerId, good, quantity, amount, false, error);
             if (error != null) return Record("Purchase", buyerId, sellerId, good, quantity, amount, false, error);
             buyer.Money -= amount; seller.Money = sellerBalance;
             seller.SetStock(good, seller.Stock(good) - quantity); buyer.SetStock(good, buyerStock);
             return Record("Purchase", buyerId, sellerId, good, quantity, amount, true, "Goods transferred seller to buyer");
+        }
+
+        // Trusted simulation command: the controller's ownership/permission check is
+        // passed explicitly. It never moves money; purchases continue through Buy.
+        public LedgerEntry TransferGoods(string from, string to, Good good, int quantity, bool accessGranted)
+        {
+            var error = ValidateParties(from, to, out var source, out var target);
+            if (error == null && !Enum.IsDefined(typeof(Good), good)) error = "Unknown good";
+            if (error == null)
+                ItemInventory.TryTransfer(source.Store, target.Store, ItemCatalog.IdFor(good), quantity, accessGranted, out error);
+            return Record("GoodsTransfer", from, to, good, quantity, 0, error == null,
+                error ?? "Goods transferred without payment");
         }
 
         public long TotalMoney()

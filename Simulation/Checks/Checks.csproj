@@ -6,10 +6,13 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../Assets/_Project/Scripts/Simulation/Economy.cs" />
+    <Compile Include="../../Assets/_Project/Scripts/Simulation/ItemCatalog.cs" />
+    <Compile Include="../../Assets/_Project/Scripts/Simulation/ItemInventory.cs" />
     <Compile Include="../../Assets/_Project/Scripts/Simulation/DailySimulation.cs" />
     <Compile Include="../../Assets/_Project/Scripts/Simulation/SimulationSave.cs" />
     <Compile Include="../../Assets/_Project/Scripts/Simulation/BusinessDefinition.cs" />
     <Compile Include="../../Assets/_Project/Scripts/Simulation/SettlementReport.cs" />
     <Compile Include="Program.cs" />
+    <Compile Include="InventoryChecks.cs" />
   </ItemGroup>
 </Project>

@@ -15,6 +15,7 @@ static class Program
 
     static void Main()
     {
+        InventoryChecks.Run(Check);
         var e = Pair();
         Check(e.Buy("buyer", "seller", Good.Bread, 2, 5).Success, "purchase accepted");
         Check(e.Residents[0].Money == 90 && e.Residents[1].Money == 30, "exact payment");
