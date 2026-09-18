@@ -127,6 +127,15 @@ namespace LivingEconomy.Simulation
             return fed;
         }
 
+        internal void Note(string kind, string resident, string target, bool success, string reason)
+            => Record(kind, resident, target, null, 0, 0, success, reason);
+
+        internal void MissMeal(Resident resident, string reason)
+        {
+            resident.Hunger = Math.Min(100, resident.Hunger + 25);
+            Record("Meal", resident.Id, "consumption", Good.Bread, 0, 0, false, reason);
+        }
+
         public LedgerEntry Transfer(string payerId, string receiverId, long amount, string reason)
         {
             var error = ValidateParties(payerId, receiverId, out var payer, out var receiver);

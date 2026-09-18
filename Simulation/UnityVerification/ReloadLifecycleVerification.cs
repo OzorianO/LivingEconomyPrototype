@@ -1,0 +1,208 @@
+using System;
+using System.IO;
+using System.Reflection;
+using LivingEconomy.Presentation;
+using LivingEconomy.Simulation;
+using UnityEditor;
+using UnityEditor.SceneManagement;
+using UnityEngine;
+
+// Runs only in the disposable verification project, never deployed to the game.
+[InitializeOnLoad]
+public static class ReloadLifecycleVerification
+{
+    private const string Prefix = "LivingEconomy.ReloadVerification.";
+    static ReloadLifecycleVerification()
+    {
+        SessionState.SetInt(Prefix + "Domain", SessionState.GetInt(Prefix + "Domain", 0) + 1);
+        EditorApplication.update += Update;
+        Application.logMessageReceived += OnLog;
+    }
+    public static void Run()
+    {
+        SessionState.SetBool(Prefix + "Running", true);
+        SessionState.SetInt(Prefix + "Step", 0);
+        SessionState.SetInt(Prefix + "Checks", 0);
+        SessionState.SetInt(Prefix + "SearchStartupErrors", 0);
+        SessionState.SetString(Prefix + "Deadline", DateTime.UtcNow.AddMinutes(3).Ticks.ToString());
+        EditorSceneManager.OpenScene("Assets/_Project/Scenes/MainSimulation.unity");
+        EditorApplication.EnterPlaymode();
+    }
+    private static void Check(bool value, string reason)
+    {
+        if (!value) throw new Exception(reason);
+        int count = SessionState.GetInt(Prefix + "Checks", 0) + 1;
+        SessionState.SetInt(Prefix + "Checks", count);
+        Debug.Log("RELOAD CHECK: " + reason);
+    }
+    private static void Call(SimulationPreview preview, string method, params object[] args)
+        => typeof(SimulationPreview).GetMethod(method, BindingFlags.NonPublic | BindingFlags.Instance).Invoke(preview, args);
+    private static SimulationPreview Preview()
+    {
+        var previews = UnityEngine.Object.FindObjectsByType<SimulationPreview>();
+        Check(previews.Length == 1, "one preview component");
+        return previews[0];
+    }
+    private static void CheckWorld(SimulationPreview preview)
+    {
+        Check(preview.GetComponents<SettlementView>().Length == 1, "one settlement component");
+        int roots = 0, people = 0;
+        foreach (Transform child in preview.transform)
+            if (child.gameObject.activeSelf && child.name == "GeneratedSettlement")
+            {
+                roots++;
+                foreach (var capsule in child.GetComponentsInChildren<CapsuleCollider>())
+                    if (capsule.enabled) people++;
+            }
+        Check(roots == 1 && people == 20, "one generated world with twenty residents");
+        var view = preview.GetComponent<SettlementView>();
+        var camera = (Camera)typeof(SettlementView).GetField("mapCamera", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(view);
+        Check(camera != null && !camera.orthographic && Mathf.Abs(camera.fieldOfView - 50) < 0.01f, "perspective camera is active");
+        var zoom = typeof(SettlementView).GetMethod("ZoomDistance", BindingFlags.NonPublic | BindingFlags.Static);
+        float normalizedZoom = (float)zoom.Invoke(null, new object[] { 70f, 1f });
+        float rawZoom = (float)zoom.Invoke(null, new object[] { 70f, 120f });
+        Check(Mathf.Abs(normalizedZoom - rawZoom) < 0.001f && normalizedZoom < 63, "raw and normalized wheel input have matching responsive zoom");
+        typeof(SettlementView).GetField("cameraDistance", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(view, 2f);
+        typeof(SettlementView).GetField("cameraPitch", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(view, 100f);
+        typeof(SettlementView).GetMethod("ApplyCameraPose", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(view, null);
+        Check((float)typeof(SettlementView).GetField("cameraDistance", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(view) == 12f
+            && (float)typeof(SettlementView).GetField("cameraPitch", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(view) == 75f, "camera zoom and tilt are bounded");
+        view.ResetCamera();
+        Check(camera.transform.position.y > 40 && camera.transform.position.y < 55, "reset restores island overview");
+        Transform terrain = null;
+        foreach (Transform child in preview.transform)
+            if (child.gameObject.activeSelf && child.name == "GeneratedSettlement")
+                terrain = child.Find("Island terrain");
+        Check(terrain != null && terrain.GetComponent<MeshCollider>() != null, "island terrain has a ground collider");
+        var mesh = terrain.GetComponent<MeshFilter>().sharedMesh;
+        Check(mesh.vertexCount == 768 && mesh.subMeshCount == 2, "island has detailed grass and beach mesh");
+        Check(mesh.bounds.max.y > 2.5f, "northern island ridge has real elevation");
+        var activeRoot = terrain.parent;
+        Check(activeRoot.Find("Bakery chimney") != null && activeRoot.Find("Well base") != null, "village has bakery chimney and well");
+        Check(Mathf.Abs(activeRoot.Find("House 1 roof 1").eulerAngles.x - 30) < 0.01f, "houses have pitched roofs");
+        Check(mesh.normals[96].y > 0.99f, "inhabited ground faces upward");
+        Physics.SyncTransforms();
+        var heroes = activeRoot.GetComponentsInChildren<IslandPlayer>();
+        Check(heroes.Length == 1 && view.Player == heroes[0], "one controllable island hero");
+        var hero = heroes[0];
+        Check(hero.IsDryGround(Vector3.zero) && !hero.IsDryGround(new Vector3(50, 0, 50)), "hero cannot enter open water");
+        var beforeHero = SimulationSave.ToXml(preview.Simulation);
+        hero.SetExploring(true); hero.TeleportToSpawn();
+        for (int i = 0; i < 8; i++) hero.MoveExplorer(Vector3.zero, false, false, 0.02f);
+        var start = hero.transform.position;
+        for (int i = 0; i < 25; i++) hero.MoveExplorer(Vector3.right, false, false, 0.02f);
+        Check(hero.transform.position.x > start.x + 1.5f && hero.transform.position.y < 0.2f, "hero walks on island ground");
+        hero.MoveExplorer(Vector3.zero, false, true, 0.02f);
+        float highest = hero.transform.position.y;
+        for (int i = 0; i < 55; i++) { hero.MoveExplorer(Vector3.zero, false, false, 0.02f); highest = Mathf.Max(highest, hero.transform.position.y); }
+        Check(highest > 0.8f && hero.transform.position.y < 0.2f, "hero jumps and lands");
+        var cc = hero.GetComponent<CharacterController>(); cc.enabled = false;
+        hero.transform.position = new Vector3(7, 0.08f, 2.8f); cc.enabled = true; Physics.SyncTransforms();
+        for (int i = 0; i < 50; i++) hero.MoveExplorer(Vector3.forward, false, false, 0.02f);
+        Check(hero.transform.position.z < 3.6f, "building walls block hero movement");
+        hero.TeleportToSpawn(); hero.SetExploring(false);
+        Check(!hero.Exploring && camera.transform.position.y > 40, "overview mode restores settlement camera");
+        Check(SimulationSave.ToXml(preview.Simulation) == beforeHero, "hero movement does not mutate the economy");
+        hero.SetExploring(true);
+        foreach (var point in new[] { new Vector3(-10.5f, 0, 11), new Vector3(10.8f, 0, -8.5f), Vector3.zero })
+        {
+            Check(terrain.GetComponent<MeshCollider>().Raycast(new Ray(point + Vector3.up * 10, Vector3.down), out var hit, 20)
+                && Mathf.Abs(hit.point.y) < 0.01f, "field, houses and roads remain on flat island ground");
+        }
+    }
+    private static void Update()
+    {
+        if (!SessionState.GetBool(Prefix + "Running", false)) return;
+        try
+        {
+            if (DateTime.UtcNow.Ticks > long.Parse(SessionState.GetString(Prefix + "Deadline", "0"))) throw new Exception("Lifecycle verification timed out");
+            int step = SessionState.GetInt(Prefix + "Step", 0);
+            if (step == 0)
+            {
+                if (!EditorApplication.isPlaying || EditorApplication.isCompiling) return;
+                var preview = Preview(); CheckWorld(preview);
+                for (int i = 0; i < 5; i++) preview.Simulation.Step();
+                preview.Simulation.AssignJob("npc-01", null, out _);
+                preview.RememberCompletedDay();
+                SessionState.SetString(Prefix + "Expected", SimulationSave.ToXml(preview.Simulation));
+                Call(preview, "AdvanceDay");
+                foreach (var npc in preview.Simulation.Economy.Residents) preview.Simulation.ArriveAtWork(npc.Id);
+                preview.Simulation.FinishWork();
+                Check(preview.Simulation.LastPaid == 18, "partial day changed wages before reload");
+                SessionState.SetInt(Prefix + "Step", 1);
+                SessionState.SetInt(Prefix + "RequestedDomain", SessionState.GetInt(Prefix + "Domain", 0));
+                EditorUtility.RequestScriptReload();
+                return;
+            }
+            if (step == 1)
+            {
+                // Wait until a new domain has actually initialized, not just another old frame.
+                if (EditorApplication.isCompiling || SessionState.GetInt(Prefix + "Domain", 0) <= SessionState.GetInt(Prefix + "RequestedDomain", 0)) return;
+                var preview = Preview();
+                if (preview.Simulation == null || preview.Simulation.DayInProgress) return;
+                Check(preview.Simulation.Economy.Tick == 5, "actual domain reload rolled back interrupted day");
+                Check(SimulationSave.ToXml(preview.Simulation) == SessionState.GetString(Prefix + "Expected", ""), "actual reload preserves exact completed economy and jobs");
+                CheckWorld(preview);
+                var view = preview.GetComponent<SettlementView>();
+                var blocks = (System.Collections.Generic.HashSet<string>)typeof(SettlementView).GetField("blockedTargets", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(view);
+                blocks.Add("farm");
+                Call(preview, "AdvanceDay");
+                SessionState.SetInt(Prefix + "Step", 2); return;
+            }
+            if (step == 2)
+            {
+                var previews = UnityEngine.Object.FindObjectsByType<SimulationPreview>();
+                if (previews.Length != 1 || previews[0].Simulation.DayInProgress) return;
+                var preview = previews[0];
+                Check(preview.Simulation.Economy.Tick == 6 && preview.Simulation.LastUnreachable > 0, "animated day completes despite blocked farm");
+                Check(preview.Simulation.Economy.TotalMoney() == preview.Simulation.Economy.InitialMoney, "animated recovery conserves money");
+                SessionState.SetString(Prefix + "Completed", SimulationSave.ToXml(preview.Simulation));
+                SessionState.SetInt(Prefix + "RequestedDomain", SessionState.GetInt(Prefix + "Domain", 0));
+                SessionState.SetInt(Prefix + "Step", 3); EditorUtility.RequestScriptReload(); return;
+            }
+            if (step == 3)
+            {
+                if (EditorApplication.isCompiling || SessionState.GetInt(Prefix + "Domain", 0) <= SessionState.GetInt(Prefix + "RequestedDomain", 0)) return;
+                var preview = Preview();
+                if (preview.Simulation == null) return;
+                Check(SimulationSave.ToXml(preview.Simulation) == SessionState.GetString(Prefix + "Completed", ""), "actual completed-day reload preserves exact state");
+                CheckWorld(preview);
+                SessionState.SetInt(Prefix + "Step", 4); EditorApplication.ExitPlaymode(); return;
+            }
+            if (step == 4)
+            {
+                if (EditorApplication.isPlayingOrWillChangePlaymode) return;
+                SessionState.SetInt(Prefix + "Step", 5); EditorApplication.EnterPlaymode(); return;
+            }
+            if (step == 5)
+            {
+                if (!EditorApplication.isPlaying) return;
+                var preview = Preview(); CheckWorld(preview);
+                Check(preview.Simulation.Economy.Tick == 0, "second Play starts fresh without duplicate UI");
+                Call(preview, "ResetScenario", SimulationSave.FromXml(SessionState.GetString(Prefix + "Expected", "")));
+                Check(preview.Simulation.Economy.Tick == 5, "load after repeated Play restores snapshot");
+                Finish(true, "Actual domain reload, rollback, blocked-route animation, repeated Play and Load passed.");
+            }
+        }
+        catch (Exception e) { Finish(false, e.ToString()); }
+    }
+    private static void OnLog(string message, string trace, LogType type)
+    {
+        if (trace.Contains("UnityEditor.Search.") && SessionState.GetBool(Prefix + "Running", false))
+        {
+            SessionState.SetInt(Prefix + "SearchStartupErrors", SessionState.GetInt(Prefix + "SearchStartupErrors", 0) + 1);
+            return; // Known headless editor search-index startup failure, unrelated to game lifecycle.
+        }
+        if (SessionState.GetBool(Prefix + "Running", false) && (type == LogType.Exception || type == LogType.Error))
+            Finish(false, message + "\n" + trace);
+    }
+    private static void Finish(bool success, string reason)
+    {
+        SessionState.SetBool(Prefix + "Running", false);
+        string result = (success ? "PASS" : "FAIL") + ": " + SessionState.GetInt(Prefix + "Checks", 0) + " lifecycle checks. " + reason
+            + " Search-index startup errors excluded: " + SessionState.GetInt(Prefix + "SearchStartupErrors", 0) + ".";
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName(Application.dataPath), "lifecycle-result.txt"), result);
+        Debug.Log(result);
+        EditorApplication.Exit(success ? 0 : 1);
+    }
+}

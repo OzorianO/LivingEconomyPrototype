@@ -12,6 +12,8 @@ namespace LivingEconomy.Simulation
         public int Version = 1;
         public long Tick, InitialMoney, Reserve;
         public int FarmYield, LastPaid, LastFed, LastBread;
+        public bool AutoEmployment;
+        public int LastUnpaid, LastUnreachable;
         public List<SavedAccount> Accounts = new List<SavedAccount>();
         public List<SavedBusiness> Businesses = new List<SavedBusiness>();
         public List<SavedJob> Jobs = new List<SavedJob>();
@@ -39,6 +41,23 @@ namespace LivingEconomy.Simulation
 
     public static class SimulationSave
     {
+        public static string ToXml(DailySimulation simulation)
+        {
+            var data = simulation.Capture();
+            using (var writer = new StringWriter())
+            {
+                new XmlSerializer(typeof(SaveData)).Serialize(writer, data);
+                return writer.ToString();
+            }
+        }
+
+        public static DailySimulation FromXml(string xml)
+        {
+            if (string.IsNullOrWhiteSpace(xml)) throw new ArgumentException("Missing snapshot.");
+            using (var text = new StringReader(xml))
+            using (var reader = XmlReader.Create(text, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null }))
+                return DailySimulation.FromSave((SaveData)new XmlSerializer(typeof(SaveData)).Deserialize(reader));
+        }
         public static void Write(string path, DailySimulation simulation)
         {
             var data = simulation.Capture();
@@ -62,5 +81,26 @@ namespace LivingEconomy.Simulation
             using (var reader = XmlReader.Create(path, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null }))
                 return DailySimulation.FromSave((SaveData)new XmlSerializer(typeof(SaveData)).Deserialize(reader));
         }
+    }
+
+    [Serializable]
+    public sealed class ReloadCheckpoint
+    {
+        public string Xml;
+        public bool Interrupted;
+        public bool HasSnapshot => !string.IsNullOrWhiteSpace(Xml);
+
+        public void Remember(DailySimulation simulation)
+        {
+            if (simulation.DayInProgress)
+            {
+                if (!HasSnapshot) throw new InvalidOperationException("Missing completed-day checkpoint.");
+                Interrupted = true;
+                return;
+            }
+            string next = SimulationSave.ToXml(simulation);
+            Xml = next; Interrupted = false;
+        }
+        public DailySimulation Restore() => SimulationSave.FromXml(Xml);
     }
 }

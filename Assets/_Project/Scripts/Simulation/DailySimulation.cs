@@ -3,6 +3,8 @@ using System.Collections.Generic;
 
 namespace LivingEconomy.Simulation
 {
+    public enum DayStage { Work, Shopping, Home }
+
     public sealed class DailySimulation
     {
         public Economy Economy { get; }
@@ -14,11 +16,17 @@ namespace LivingEconomy.Simulation
         public int LastFed { get; private set; }
         public int LastPaid { get; private set; }
         public int LastBread { get; private set; }
+        public int LastUnpaid { get; private set; }
+        public int LastUnreachable { get; private set; }
+        public bool AutoEmployment { get; }
+        private readonly Dictionary<string, string> decisions = new Dictionary<string, string>();
+        public string DecisionOf(string id) => decisions.TryGetValue(id, out var reason) ? reason : "No decision yet.";
         private readonly int farmYield;
         private readonly long reserve;
 
-        public DailySimulation(int seed = 42, int farmYield = 2, long capital = 120, IReadOnlyList<BusinessDefinition> businesses = null)
+        public DailySimulation(int seed = 42, int farmYield = 2, long capital = 120, IReadOnlyList<BusinessDefinition> businesses = null, bool autoEmployment = true)
         {
+            AutoEmployment = autoEmployment;
             if (farmYield < 0 || farmYield > 100 || capital < 0 || capital > 200) throw new ArgumentOutOfRangeException();
             this.farmYield = farmYield; reserve = capital;
             var definitions = new List<BusinessDefinition>(businesses ?? EmploymentScenario.Businesses());
@@ -93,16 +101,61 @@ namespace LivingEconomy.Simulation
         private readonly HashSet<string> worked = new HashSet<string>();
         private readonly HashSet<string> shopped = new HashSet<string>();
         private readonly HashSet<string> ate = new HashSet<string>();
+        private readonly Dictionary<string, string> failedWork = new Dictionary<string, string>();
+        private readonly Dictionary<string, string> failedShopping = new Dictionary<string, string>();
+        private readonly Dictionary<string, string> failedHome = new Dictionary<string, string>();
         private int bakingCapacity;
         private bool workFinished;
+        private bool shoppingFinished;
         public bool DayInProgress { get; private set; }
+
+        // Daily rotating priority is shared by hiring, wages, shopping and meals.
+        private IEnumerable<Resident> Priority(long tick)
+        {
+            int count = Economy.Residents.Count;
+            for (int i = 0; i < count; i++)
+                yield return Economy.Residents[(i + (int)(tick % count)) % count];
+        }
+
+        private void Decide(string id, string target, bool success, string reason)
+        {
+            decisions[id] = reason;
+            Economy.Note("JobDecision", id, target, success, reason);
+        }
+
+        private void SeekJobs()
+        {
+            foreach (var npc in Priority(Economy.Tick))
+            {
+                if (EmployerOf(npc.Id) != null) continue;
+                BusinessDefinition best = null;
+                bool vacancy = false;
+                foreach (var business in Businesses)
+                {
+                    if (EmployeeCount(business.Id) >= business.Capacity) continue;
+                    vacancy = true;
+                    var account = business.Id == Farm.Id ? Farm : Bakery;
+                    if (account.Money < business.Wage) continue;
+                    if (best == null || business.Wage > best.Wage
+                        || (business.Wage == best.Wage && string.CompareOrdinal(business.Id, best.Id) < 0)) best = business;
+                }
+                if (best == null)
+                    Decide(npc.Id, null, false, vacancy ? "Vacancies exist, but employers cannot fund a wage. Retry tomorrow." : "No vacancy. Retry tomorrow.");
+                else if (AssignJob(npc.Id, best.Id, out var reason))
+                    Decide(npc.Id, best.Id, true, "Accepted " + best.Id + ": highest available funded wage; ties use business ID.");
+                else Decide(npc.Id, best.Id, false, reason);
+            }
+        }
 
         public void BeginDay()
         {
             if (DayInProgress) throw new InvalidOperationException("Finish the current day first.");
             Economy.AdvanceTick(); LastPaid = 0; LastFed = 0; LastBread = 0;
+            LastUnpaid = 0; LastUnreachable = 0;
+            if (AutoEmployment) SeekJobs();
             worked.Clear(); shopped.Clear(); ate.Clear(); bakingCapacity = 0;
-            workFinished = false; DayInProgress = true;
+            failedWork.Clear(); failedShopping.Clear(); failedHome.Clear();
+            workFinished = false; shoppingFinished = false; DayInProgress = true;
         }
 
         private Resident FindResident(string id)
@@ -113,13 +166,28 @@ namespace LivingEconomy.Simulation
 
         public bool ArriveAtWork(string id)
         {
-            if (!DayInProgress || workFinished || FindResident(id) == null || !worked.Add(id)) return false;
+            return DayInProgress && !workFinished && FindResident(id) != null && worked.Add(id);
+        }
+
+        private void SettleWork(Resident npc)
+        {
+            string id = npc.Id;
+            if (failedWork.TryGetValue(id, out var failure))
+            {
+                Economy.Note("Unreachable", id, EmployerOf(id), false, failure);
+                return;
+            }
             bool owner = IsOwner(id);
             string employer = EmployerOf(id);
-            if (employer == null) return false; // Unemployment counts as a completed work attempt.
+            if (employer == null) return;
             if (!owner)
             {
-                if (Business(employer).Wage > 0 && !Economy.Transfer(employer, id, Business(employer).Wage, "Daily wage on work arrival").Success) return false;
+                if (Business(employer).Wage > 0 && !Economy.Transfer(employer, id, Business(employer).Wage, "Daily wage after work arrivals").Success)
+                {
+                    LastUnpaid++;
+                    Decide(id, employer, false, "Unpaid: employer lacks money. No production today; keep job and retry tomorrow.");
+                    return;
+                }
                 if (Business(employer).Wage > 0) LastPaid++;
             }
             if (employer == Farm.Id)
@@ -127,12 +195,12 @@ namespace LivingEconomy.Simulation
                 if (farmYield > 0) Economy.Produce(Farm.Id, Good.Grain, farmYield);
             }
             else bakingCapacity += 2;
-            return true;
         }
 
         public bool FinishWork()
         {
             if (!DayInProgress || workFinished || worked.Count != Economy.Residents.Count) return false;
+            foreach (var npc in Priority(Economy.Tick)) SettleWork(npc);
             int purchase = (int)Math.Min(bakingCapacity, Math.Min(Farm.Stock(Good.Grain), Bakery.Money / 3));
             if (purchase > 0) Economy.Buy(Bakery.Id, Farm.Id, Good.Grain, purchase, 3);
             int bread = Math.Min(bakingCapacity, Bakery.Stock(Good.Grain));
@@ -143,23 +211,49 @@ namespace LivingEconomy.Simulation
 
         public bool ArriveAtBakery(string id)
         {
-            var npc = FindResident(id);
-            if (!DayInProgress || !workFinished || npc == null || !shopped.Add(id)) return false;
-            return npc.Stock(Good.Bread) > 0 || Economy.Buy(id, Bakery.Id, Good.Bread, 1, 6).Success;
+            return DayInProgress && workFinished && !shoppingFinished && FindResident(id) != null && shopped.Add(id);
+        }
+
+        public bool FinishShopping()
+        {
+            if (!DayInProgress || !workFinished || shoppingFinished || shopped.Count != Economy.Residents.Count) return false;
+            foreach (var npc in Priority(Economy.Tick))
+            {
+                if (failedShopping.TryGetValue(npc.Id, out var failure))
+                    Economy.Note("Unreachable", npc.Id, Bakery.Id, false, failure);
+                else if (npc.Stock(Good.Bread) == 0) Economy.Buy(npc.Id, Bakery.Id, Good.Bread, 1, 6);
+            }
+            shoppingFinished = true;
+            return true;
         }
 
         public bool ArriveAtHome(string id)
         {
             var npc = FindResident(id);
-            if (!DayInProgress || npc == null || !shopped.Contains(id) || !ate.Add(id)) return false;
-            bool fed = Economy.Eat(npc);
-            if (fed) LastFed++;
-            return fed;
+            return DayInProgress && shoppingFinished && npc != null && ate.Add(id);
+        }
+
+        // Failure resolves one attempt, without inventing an arrival or duplicating an action.
+        public bool ReportUnreachable(string id, DayStage stage, string reason)
+        {
+            if (string.IsNullOrWhiteSpace(reason)) return false;
+            bool accepted;
+            Dictionary<string, string> failures;
+            if (stage == DayStage.Work) { accepted = ArriveAtWork(id); failures = failedWork; }
+            else if (stage == DayStage.Shopping) { accepted = ArriveAtBakery(id); failures = failedShopping; }
+            else if (stage == DayStage.Home) { accepted = ArriveAtHome(id); failures = failedHome; }
+            else return false;
+            if (!accepted) return false;
+            failures.Add(id, reason); LastUnreachable++;
+            return true;
         }
 
         public bool FinishDay()
         {
-            if (!DayInProgress || ate.Count != Economy.Residents.Count) return false;
+            if (!DayInProgress || !shoppingFinished || ate.Count != Economy.Residents.Count) return false;
+            foreach (var npc in Priority(Economy.Tick))
+                if (failedHome.TryGetValue(npc.Id, out var failure)) Economy.MissMeal(npc, failure);
+                else if (Economy.Eat(npc)) LastFed++;
             DrawProfit(Farm, Businesses[0].Owner); DrawProfit(Bakery, Businesses[1].Owner);
             DayInProgress = false;
             return true;
@@ -170,9 +264,8 @@ namespace LivingEconomy.Simulation
             BeginDay();
             foreach (var npc in Economy.Residents) ArriveAtWork(npc.Id);
             FinishWork();
-            // Fast mode uses rotated arrival priority; animated mode uses actual arrivals.
-            for (int i = 0; i < Economy.Residents.Count; i++)
-                ArriveAtBakery(Economy.Residents[(i + (int)(Economy.Tick % Economy.Residents.Count)) % Economy.Residents.Count].Id);
+            foreach (var npc in Economy.Residents) ArriveAtBakery(npc.Id);
+            FinishShopping();
             foreach (var npc in Economy.Residents) ArriveAtHome(npc.Id);
             FinishDay();
         }
@@ -191,7 +284,8 @@ namespace LivingEconomy.Simulation
             foreach (var a in accounts)
                 data.Accounts.Add(new SavedAccount { Id = a.Id, Name = a.Name, Profession = (int)a.Profession,
                     Money = a.Money, Grain = a.Stock(Good.Grain), Bread = a.Stock(Good.Bread), Hunger = a.Hunger });
-            data.Version = 2;
+            data.Version = 3; data.AutoEmployment = AutoEmployment;
+            data.LastUnpaid = LastUnpaid; data.LastUnreachable = LastUnreachable;
             foreach (var b in Businesses) data.Businesses.Add(new SavedBusiness { Id = b.Id, Owner = b.Owner, Capacity = b.Capacity, Wage = b.Wage });
             foreach (var job in Jobs) data.Jobs.Add(new SavedJob { Resident = job.Key, Employer = job.Value });
             foreach (var e in Economy.Ledger)
@@ -203,11 +297,13 @@ namespace LivingEconomy.Simulation
 
         public static DailySimulation FromSave(SaveData data)
         {
-            if (data == null || (data.Version != 1 && data.Version != 2) || data.Jobs == null || data.LastPaid < 0 || data.LastPaid > 18
+            if (data == null || (data.Version < 1 || data.Version > 3) || data.Jobs == null || data.LastPaid < 0 || data.LastPaid > 18
                 || data.LastFed < 0 || data.LastFed > 20 || data.LastBread < 0 || data.LastBread > 40)
                 throw new ArgumentException("Unsupported or invalid save.");
+            if (data.LastUnpaid < 0 || data.LastUnpaid > 18 || data.LastUnreachable < 0 || data.LastUnreachable > 60)
+                throw new ArgumentException("Invalid saved diagnostics.");
             List<BusinessDefinition> definitions = null;
-            if (data.Version == 2)
+            if (data.Version >= 2)
             {
                 if (data.Businesses == null) throw new ArgumentException("Missing businesses.");
                 definitions = new List<BusinessDefinition>();
@@ -217,7 +313,8 @@ namespace LivingEconomy.Simulation
                     definitions.Add(new BusinessDefinition(b.Id, b.Owner, b.Capacity, b.Wage));
                 }
             }
-            var restored = new DailySimulation(farmYield: data.FarmYield, capital: data.Reserve, businesses: definitions);
+            var restored = new DailySimulation(farmYield: data.FarmYield, capital: data.Reserve, businesses: definitions,
+                autoEmployment: data.Version >= 3 && data.AutoEmployment);
             var seen = new HashSet<string>();
             restored.jobs.Clear();
             foreach (var job in data.Jobs)
@@ -236,6 +333,9 @@ namespace LivingEconomy.Simulation
                     }
             restored.Economy.Restore(data);
             restored.LastPaid = data.LastPaid; restored.LastFed = data.LastFed; restored.LastBread = data.LastBread;
+            restored.LastUnpaid = data.LastUnpaid; restored.LastUnreachable = data.LastUnreachable;
+            foreach (var entry in restored.Economy.Ledger)
+                if (entry.Kind == "JobDecision" && entry.From != null) restored.decisions[entry.From] = entry.Reason;
             return restored;
         }
     }
