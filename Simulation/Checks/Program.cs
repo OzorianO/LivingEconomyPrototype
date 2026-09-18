@@ -49,7 +49,35 @@ static class Program
                 if (r.Money < 0 || r.Stock(Good.Bread) < 0) throw new Exception("Negative state");
         }
         Check(true, "10000 mixed operations preserve invariants");
-        Console.WriteLine($"PASS: {count} assertions; 10000 mixed-operation ticks.");
+        var daily = new DailySimulation();
+        var replay = new DailySimulation();
+        for (int day = 1; day <= 100; day++)
+        {
+            daily.Step(); replay.Step();
+            Check(daily.Economy.TotalMoney() == daily.Economy.InitialMoney, "daily money conserved");
+            Check(daily.LastPaid == 18 && daily.LastFed == 20 && daily.LastBread == 20, "baseline employment and meals");
+            Check(daily.Farm.Money == 120 && daily.Bakery.Money == 120, "working capital preserved");
+            Check(Snapshot(daily.Economy) == Snapshot(replay.Economy), "daily replay deterministic");
+            foreach (var npc in daily.Economy.Residents) Check(npc.Hunger == 0 && npc.Money >= 0, "baseline no hunger");
+            if (day == 30 || day == 100) Console.WriteLine($"Day {day}: paid={daily.LastPaid}, fed={daily.LastFed}, bread={daily.LastBread}, coins={daily.Economy.TotalMoney()}");
+        }
+        foreach (var scenario in new[] { new DailySimulation(farmYield: 0), new DailySimulation(capital: 0) })
+        {
+            for (int day = 0; day < 100; day++)
+            {
+                scenario.Step();
+                Check(scenario.Economy.TotalMoney() == scenario.Economy.InitialMoney, "crisis money conserved");
+                Check(scenario.Farm.Money >= 0 && scenario.Bakery.Money >= 0, "crisis businesses solvent or zero");
+                foreach (var npc in scenario.Economy.Residents)
+                    Check(npc.Money >= 0 && npc.Stock(Good.Bread) >= 0 && npc.Hunger <= 100, "crisis bounds");
+            }
+            Check(scenario.LastPaid < 18 && scenario.LastFed < 20, "crisis affects jobs and food");
+        }
+        var recipe = Pair();
+        before = Snapshot(recipe);
+        Check(!recipe.Produce("seller", Good.Bread, 1, Good.Grain).Success && Snapshot(recipe) == before, "missing recipe inputs atomic");
+        Check(!recipe.Produce("seller", Good.Bread, 1, Good.Bread).Success && Snapshot(recipe) == before, "self recipe rejected");
+        Console.WriteLine($"PASS: {count} assertions; 10000 trade ticks; baseline and crisis scenarios, 100 days each.");
     }
     static string Snapshot(Economy e)
     {

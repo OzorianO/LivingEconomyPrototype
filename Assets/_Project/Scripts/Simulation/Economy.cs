@@ -87,6 +87,46 @@ namespace LivingEconomy.Simulation
 
         public void AdvanceTick() => Tick = checked(Tick + 1);
 
+        public Resident AddBusiness(string id, string name)
+        {
+            var account = new Resident(id, name, Profession.None, 0, 0, 0);
+            byId.Add(id, account);
+            Record("Business", "scenario", id, null, 0, 0, true, "Separate business account");
+            return account;
+        }
+
+        public LedgerEntry Produce(string id, Good output, int quantity, Good? input = null)
+        {
+            Resident account;
+            string error = id == null || !byId.TryGetValue(id, out account) ? "Unknown participant" : null;
+            account = error == null ? byId[id] : null;
+            if (error == null && (!Enum.IsDefined(typeof(Good), output) || quantity <= 0
+                || (input.HasValue && (!Enum.IsDefined(typeof(Good), input.Value) || input == output)))) error = "Invalid recipe";
+            if (error == null && input.HasValue && account.Stock(input.Value) < quantity) error = "Insufficient ingredients";
+            int stock = 0;
+            if (error == null)
+                try { stock = checked(account.Stock(output) + quantity); }
+                catch (OverflowException) { error = "Stock overflow"; }
+            if (error != null) return Record("Production", id, id, output, quantity, 0, false, error);
+            if (input.HasValue)
+            {
+                account.SetStock(input.Value, account.Stock(input.Value) - quantity);
+                Record("Ingredient", id, "production", input, quantity, 0, true, "Recipe input consumed");
+            }
+            account.SetStock(output, stock);
+            return Record("Production", "production", id, output, quantity, 0, true, "Recipe output created");
+        }
+
+        public bool Eat(Resident resident)
+        {
+            if (resident == null || !residents.Contains(resident)) throw new ArgumentException("Unknown resident");
+            bool fed = resident.Stock(Good.Bread) > 0;
+            if (fed) resident.SetStock(Good.Bread, resident.Stock(Good.Bread) - 1);
+            resident.Hunger = fed ? Math.Max(0, resident.Hunger - 25) : Math.Min(100, resident.Hunger + 25);
+            Record("Meal", resident.Id, "consumption", Good.Bread, fed ? 1 : 0, 0, fed, fed ? "Bread eaten" : "No food");
+            return fed;
+        }
+
         public LedgerEntry Transfer(string payerId, string receiverId, long amount, string reason)
         {
             var error = ValidateParties(payerId, receiverId, out var payer, out var receiver);
@@ -132,7 +172,7 @@ namespace LivingEconomy.Simulation
         public long TotalMoney()
         {
             long total = 0;
-            foreach (var resident in residents) total = checked(total + resident.Money);
+            foreach (var resident in byId.Values) total = checked(total + resident.Money);
             return total;
         }
 
