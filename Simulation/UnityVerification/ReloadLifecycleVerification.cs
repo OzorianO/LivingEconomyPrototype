@@ -132,6 +132,36 @@ public static class ReloadLifecycleVerification
                 && Mathf.Abs(hit.point.y) < 0.01f, "field, houses and roads remain on flat island ground");
         }
     }
+    private static void CheckPresentation(SimulationPreview preview)
+    {
+        var view = preview.GetComponent<SettlementView>();
+        string original = SimulationSave.ToXml(preview.Simulation);
+        Check(preview.Simulation.AssignJob("npc-11", null, out _), "presentation test can leave bakery job");
+        typeof(SettlementView).GetMethod("Update", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(view, null);
+        var people = (System.Collections.Generic.Dictionary<string, Renderer>)typeof(SettlementView)
+            .GetField("people", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(view);
+        var unemployed = people["npc-11"].sharedMaterial;
+        Check(unemployed != people["npc-12"].sharedMaterial, "unemployed resident is not coloured as a baker");
+        Check(people["npc-00"].sharedMaterial != people["npc-01"].sharedMaterial
+            && people["npc-00"].sharedMaterial != unemployed, "owner has a distinct colour");
+        Call(preview, "ResetScenario", SimulationSave.FromXml(original));
+        Call(preview, "AdvanceDay");
+        var slots = (System.Collections.Generic.Dictionary<string, Vector3>)typeof(SettlementView)
+            .GetField("workplaces", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(view);
+        var counters = new System.Collections.Generic.Dictionary<string, int>();
+        foreach (var npc in preview.Simulation.Economy.Residents)
+        {
+            string employer = preview.Simulation.EmployerOf(npc.Id);
+            if (employer == null) continue;
+            counters.TryGetValue(employer, out int index); counters[employer] = index + 1;
+            float centre = employer == "farm" ? -7 : 7;
+            var expected = new Vector3(centre + (index % 5 - 2) * 1.15f, 0.8f, 3.25f - index / 5 * 0.75f);
+            Check(Vector3.Distance(slots[npc.Id], expected) < 0.001f, "work slot is indexed within its own business: " + npc.Id);
+            Check(!Physics.CheckSphere(slots[npc.Id], 0.32f, Physics.DefaultRaycastLayers,
+                QueryTriggerInteraction.Ignore), "work slot does not intersect building colliders: " + npc.Id);
+        }
+        Call(preview, "ResetScenario", SimulationSave.FromXml(original));
+    }
     private static void Update()
     {
         if (!SessionState.GetBool(Prefix + "Running", false)) return;
@@ -166,8 +196,7 @@ public static class ReloadLifecycleVerification
                 Check(SimulationSave.ToXml(preview.Simulation) == SessionState.GetString(Prefix + "Expected", ""), "actual reload preserves exact completed economy and jobs");
                 CheckWorld(preview);
                 var view = preview.GetComponent<SettlementView>();
-                var blocks = (System.Collections.Generic.HashSet<string>)typeof(SettlementView).GetField("blockedTargets", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(view);
-                blocks.Add("farm");
+                view.SetRouteBlocked("farm", true);
                 Call(preview, "AdvanceDay");
                 SessionState.SetInt(Prefix + "Step", 2); return;
             }
@@ -199,7 +228,7 @@ public static class ReloadLifecycleVerification
             if (step == 5)
             {
                 if (!EditorApplication.isPlaying) return;
-                var preview = Preview(); CheckWorld(preview);
+                var preview = Preview(); CheckWorld(preview); CheckPresentation(preview);
                 Check(preview.Simulation.Economy.Tick == 0, "second Play starts fresh without duplicate UI");
                 Call(preview, "ResetScenario", SimulationSave.FromXml(SessionState.GetString(Prefix + "Expected", "")));
                 Check(preview.Simulation.Economy.Tick == 5, "load after repeated Play restores snapshot");
