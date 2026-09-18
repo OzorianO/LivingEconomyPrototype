@@ -38,34 +38,91 @@ namespace LivingEconomy.Simulation
             Jobs = new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(jobs);
         }
 
-        public void Step()
+        private readonly HashSet<string> worked = new HashSet<string>();
+        private readonly HashSet<string> shopped = new HashSet<string>();
+        private readonly HashSet<string> ate = new HashSet<string>();
+        private int bakingCapacity;
+        private bool workFinished;
+        public bool DayInProgress { get; private set; }
+
+        public void BeginDay()
         {
+            if (DayInProgress) throw new InvalidOperationException("Finish the current day first.");
             Economy.AdvanceTick(); LastPaid = 0; LastFed = 0; LastBread = 0;
-            // Owners work themselves. Employees work only after an actual funded wage.
-            int farmers = 1, bakers = 1;
-            foreach (var job in Jobs)
-                if (Economy.Transfer(job.Value, job.Key, 6, "Daily wage").Success)
-                {
-                    LastPaid++;
-                    if (job.Value == Farm.Id) farmers++; else bakers++;
-                }
-            int grain = farmers * farmYield;
-            if (grain > 0) Economy.Produce(Farm.Id, Good.Grain, grain);
-            int needed = bakers * 2;
-            int purchase = (int)Math.Min(needed, Math.Min(Farm.Stock(Good.Grain), Bakery.Money / 3));
-            if (purchase > 0) Economy.Buy(Bakery.Id, Farm.Id, Good.Grain, purchase, 3);
-            int bread = Math.Min(needed, Bakery.Stock(Good.Grain));
-            if (bread > 0 && Economy.Produce(Bakery.Id, Good.Bread, bread, Good.Grain).Success) LastBread = bread;
-            // Rotate purchase priority so scarce food is not always reserved for the same IDs.
-            for (int i = 0; i < Economy.Residents.Count; i++)
-            {
-                var npc = Economy.Residents[(i + (int)(Economy.Tick % Economy.Residents.Count)) % Economy.Residents.Count];
-                if (npc.Stock(Good.Bread) == 0) Economy.Buy(npc.Id, Bakery.Id, Good.Bread, 1, 6);
-                if (Economy.Eat(npc)) LastFed++;
-            }
-            DrawProfit(Farm, "npc-00"); DrawProfit(Bakery, "npc-06");
+            worked.Clear(); shopped.Clear(); ate.Clear(); bakingCapacity = 0;
+            workFinished = false; DayInProgress = true;
         }
 
+        private Resident FindResident(string id)
+        {
+            foreach (var npc in Economy.Residents) if (npc.Id == id) return npc;
+            return null;
+        }
+
+        public bool ArriveAtWork(string id)
+        {
+            if (!DayInProgress || workFinished || FindResident(id) == null || !worked.Add(id)) return false;
+            bool owner = id == "npc-00" || id == "npc-06";
+            string employer = owner ? (id == "npc-00" ? Farm.Id : Bakery.Id) : Jobs[id];
+            if (!owner)
+            {
+                if (!Economy.Transfer(employer, id, 6, "Daily wage on work arrival").Success) return false;
+                LastPaid++;
+            }
+            if (employer == Farm.Id)
+            {
+                if (farmYield > 0) Economy.Produce(Farm.Id, Good.Grain, farmYield);
+            }
+            else bakingCapacity += 2;
+            return true;
+        }
+
+        public bool FinishWork()
+        {
+            if (!DayInProgress || workFinished || worked.Count != Economy.Residents.Count) return false;
+            int purchase = (int)Math.Min(bakingCapacity, Math.Min(Farm.Stock(Good.Grain), Bakery.Money / 3));
+            if (purchase > 0) Economy.Buy(Bakery.Id, Farm.Id, Good.Grain, purchase, 3);
+            int bread = Math.Min(bakingCapacity, Bakery.Stock(Good.Grain));
+            if (bread > 0 && Economy.Produce(Bakery.Id, Good.Bread, bread, Good.Grain).Success) LastBread = bread;
+            workFinished = true;
+            return true;
+        }
+
+        public bool ArriveAtBakery(string id)
+        {
+            var npc = FindResident(id);
+            if (!DayInProgress || !workFinished || npc == null || !shopped.Add(id)) return false;
+            return npc.Stock(Good.Bread) > 0 || Economy.Buy(id, Bakery.Id, Good.Bread, 1, 6).Success;
+        }
+
+        public bool ArriveAtHome(string id)
+        {
+            var npc = FindResident(id);
+            if (!DayInProgress || npc == null || !shopped.Contains(id) || !ate.Add(id)) return false;
+            bool fed = Economy.Eat(npc);
+            if (fed) LastFed++;
+            return fed;
+        }
+
+        public bool FinishDay()
+        {
+            if (!DayInProgress || ate.Count != Economy.Residents.Count) return false;
+            DrawProfit(Farm, "npc-00"); DrawProfit(Bakery, "npc-06");
+            DayInProgress = false;
+            return true;
+        }
+
+        public void Step()
+        {
+            BeginDay();
+            foreach (var npc in Economy.Residents) ArriveAtWork(npc.Id);
+            FinishWork();
+            // Fast mode uses rotated arrival priority; animated mode uses actual arrivals.
+            for (int i = 0; i < Economy.Residents.Count; i++)
+                ArriveAtBakery(Economy.Residents[(i + (int)(Economy.Tick % Economy.Residents.Count)) % Economy.Residents.Count].Id);
+            foreach (var npc in Economy.Residents) ArriveAtHome(npc.Id);
+            FinishDay();
+        }
         private void DrawProfit(Resident business, string owner)
         {
             long amount = Math.Min(6, Math.Max(0, business.Money - reserve));

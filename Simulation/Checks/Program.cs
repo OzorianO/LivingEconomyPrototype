@@ -77,7 +77,35 @@ static class Program
         before = Snapshot(recipe);
         Check(!recipe.Produce("seller", Good.Bread, 1, Good.Grain).Success && Snapshot(recipe) == before, "missing recipe inputs atomic");
         Check(!recipe.Produce("seller", Good.Bread, 1, Good.Bread).Success && Snapshot(recipe) == before, "self recipe rejected");
-        Console.WriteLine($"PASS: {count} assertions; 10000 trade ticks; baseline and crisis scenarios, 100 days each.");
+        foreach (var staged in new[] { new DailySimulation(), new DailySimulation(farmYield: 0), new DailySimulation(capital: 0) })
+        {
+            var stagedEconomy = staged.Economy;
+            staged.BeginDay();
+            Check(staged.LastPaid == 0 && staged.LastBread == 0 && staged.LastFed == 0, "begin day does not settle economy");
+            Check(!staged.ArriveAtBakery("npc-01") && !staged.ArriveAtHome("npc-01") && !staged.FinishDay(), "out of order actions refused");
+            Check(!staged.ArriveAtWork("missing") && !staged.FinishWork(), "invalid arrivals do not advance work");
+            foreach (var npc in stagedEconomy.Residents)
+            {
+                staged.ArriveAtWork(npc.Id);
+                int entries = stagedEconomy.Ledger.Count;
+                Check(!staged.ArriveAtWork(npc.Id) && stagedEconomy.Ledger.Count == entries, "duplicate wages and work prevented");
+            }
+            Check(staged.LastFed == 0 && staged.LastBread == 0, "no purchases or bread before work closes");
+            Check(staged.FinishWork() && !staged.FinishWork(), "baking executes once");
+            foreach (var npc in stagedEconomy.Residents)
+            {
+                staged.ArriveAtBakery(npc.Id);
+                int entries = stagedEconomy.Ledger.Count;
+                Check(!staged.ArriveAtBakery(npc.Id) && stagedEconomy.Ledger.Count == entries, "duplicate purchases prevented");
+                Check(npc.Hunger == 0, "hunger changes only at home");
+                staged.ArriveAtHome(npc.Id);
+                entries = stagedEconomy.Ledger.Count;
+                Check(!staged.ArriveAtHome(npc.Id) && stagedEconomy.Ledger.Count == entries, "duplicate meals prevented");
+            }
+            Check(staged.FinishDay() && !staged.FinishDay() && !staged.DayInProgress, "day closes once");
+            Check(stagedEconomy.TotalMoney() == stagedEconomy.InitialMoney, "arrival money conserved");
+        }
+        Console.WriteLine($"PASS: {count} assertions; 10000 trade ticks; baseline and crisis scenarios, 100 days each; staged arrivals.");
     }
     static string Snapshot(Economy e)
     {

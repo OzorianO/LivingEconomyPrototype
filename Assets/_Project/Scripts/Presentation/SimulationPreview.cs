@@ -14,7 +14,7 @@ namespace LivingEconomy.Presentation
         {
             if (autoDays && !settlement.Walking && !settlement.Paused) AdvanceDay();
         }
-        private void AdvanceDay() { simulation.Step(); settlement.BeginDay(); }
+        private void AdvanceDay() { simulation.BeginDay(); settlement.BeginDay(); }
         private void ResetScenario(DailySimulation scenario)
         {
             autoDays = false; simulation = scenario; settlement.ResetWalking();
@@ -39,7 +39,7 @@ namespace LivingEconomy.Presentation
             GUILayout.BeginArea(Panel, GUI.skin.box);
             GUILayout.Label("Living Economy — daily simulation");
             GUILayout.Label($"Day {economy.Tick} | NPC: 20 | Coins: {economy.TotalMoney()} / {economy.InitialMoney}");
-            GUILayout.Label($"Last day: paid {simulation.LastPaid}/18 | fed {simulation.LastFed}/20 | bread produced {simulation.LastBread}");
+            GUILayout.Label($"{(simulation.DayInProgress ? "Current" : "Completed")} day: paid {simulation.LastPaid}/18 | fed {simulation.LastFed}/20 | bread produced {simulation.LastBread}");
             GUILayout.Label("Click a resident, farm or bakery on the map to inspect it.");
             GUILayout.BeginHorizontal();
             GUI.enabled = !settlement.Walking && !autoDays;
@@ -57,7 +57,7 @@ namespace LivingEconomy.Presentation
             settlement.Paused = GUILayout.Toggle(settlement.Paused, "Pause walking");
             GUILayout.EndHorizontal();
             GUILayout.Label("Route: " + settlement.Activity);
-            GUILayout.Label("Daily accounts settle first; walking visualizes the daily route.");
+            GUILayout.Label("Work arrival: wages. Bakery arrival: purchase. Home arrival: meal.");
             settlement.DrawSelection();
             scroll = GUILayout.BeginScrollView(scroll);
             foreach (var business in new[] { simulation.Farm, simulation.Bakery })

@@ -169,13 +169,23 @@ namespace LivingEconomy.Presentation
                 var route = routes[person.Key];
                 if (route.Count == 0) continue;
                 person.Value.transform.position = Vector3.MoveTowards(person.Value.transform.position, route.Peek(), 5 * Time.deltaTime);
-                if (Vector3.Distance(person.Value.transform.position, route.Peek()) < 0.01f) route.Dequeue();
+                if (Vector3.Distance(person.Value.transform.position, route.Peek()) < 0.01f)
+                {
+                    route.Dequeue();
+                    if (route.Count == 0)
+                    {
+                        if (phase == 0) preview.Simulation.ArriveAtWork(person.Key);
+                        else if (phase == 2) preview.Simulation.ArriveAtBakery(person.Key);
+                        else if (phase == 4) preview.Simulation.ArriveAtHome(person.Key);
+                    }
+                }
                 if (route.Count > 0) arrived = false;
             }
             if (phase == 1 || phase == 3)
             {
                 stopTime -= Time.deltaTime;
                 if (stopTime > 0) return;
+                if (phase == 1) preview.Simulation.FinishWork();
                 phase++;
                 int index = 0;
                 foreach (var person in people)
@@ -183,7 +193,7 @@ namespace LivingEconomy.Presentation
             }
             else if (arrived)
             {
-                if (phase == 4) Walking = false;
+                if (phase == 4) { preview.Simulation.FinishDay(); Walking = false; }
                 else { phase++; stopTime = 2; }
             }
         }
