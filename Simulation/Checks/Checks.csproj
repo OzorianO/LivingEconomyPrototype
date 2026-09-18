@@ -7,6 +7,7 @@
   <ItemGroup>
     <Compile Include="../../Assets/_Project/Scripts/Simulation/Economy.cs" />
     <Compile Include="../../Assets/_Project/Scripts/Simulation/DailySimulation.cs" />
+    <Compile Include="../../Assets/_Project/Scripts/Simulation/SimulationSave.cs" />
     <Compile Include="Program.cs" />
   </ItemGroup>
 </Project>

@@ -128,5 +128,40 @@ namespace LivingEconomy.Simulation
             long amount = Math.Min(6, Math.Max(0, business.Money - reserve));
             if (amount > 0) Economy.Transfer(business.Id, owner, amount, "Owner profit above working reserve");
         }
+
+        public SaveData Capture()
+        {
+            if (DayInProgress) throw new InvalidOperationException("Save after the day has finished.");
+            var data = new SaveData { Tick = Economy.Tick, InitialMoney = Economy.InitialMoney, Reserve = reserve,
+                FarmYield = farmYield, LastPaid = LastPaid, LastFed = LastFed, LastBread = LastBread };
+            var accounts = new List<Resident>(Economy.Residents); accounts.Add(Farm); accounts.Add(Bakery);
+            foreach (var a in accounts)
+                data.Accounts.Add(new SavedAccount { Id = a.Id, Name = a.Name, Profession = (int)a.Profession,
+                    Money = a.Money, Grain = a.Stock(Good.Grain), Bread = a.Stock(Good.Bread), Hunger = a.Hunger });
+            foreach (var job in Jobs) data.Jobs.Add(new SavedJob { Resident = job.Key, Employer = job.Value });
+            foreach (var e in Economy.Ledger)
+                data.Ledger.Add(new SavedEntry { Sequence = e.Sequence, Tick = e.Tick, Kind = e.Kind, From = e.From,
+                    To = e.To, Good = e.Good.HasValue ? (int)e.Good.Value : -1, Quantity = e.Quantity,
+                    Amount = e.Amount, Success = e.Success, Reason = e.Reason });
+            return data;
+        }
+
+        public static DailySimulation FromSave(SaveData data)
+        {
+            if (data == null || data.Version != 1 || data.Jobs == null || data.LastPaid < 0 || data.LastPaid > 18
+                || data.LastFed < 0 || data.LastFed > 20 || data.LastBread < 0 || data.LastBread > 20)
+                throw new ArgumentException("Unsupported or invalid save.");
+            var restored = new DailySimulation(farmYield: data.FarmYield, capital: data.Reserve);
+            var seen = new HashSet<string>();
+            if (data.Jobs.Count != restored.Jobs.Count) throw new ArgumentException("Invalid saved jobs.");
+            foreach (var job in data.Jobs)
+                if (job == null || job.Resident == null || !seen.Add(job.Resident)
+                    || !restored.Jobs.TryGetValue(job.Resident, out var employer) || employer != job.Employer)
+                    throw new ArgumentException("Invalid saved job assignment.");
+            restored.Economy.Restore(data);
+            restored.LastPaid = data.LastPaid; restored.LastFed = data.LastFed; restored.LastBread = data.LastBread;
+            return restored;
+        }
     }
 }
+

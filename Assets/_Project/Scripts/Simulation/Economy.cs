@@ -62,7 +62,7 @@ namespace LivingEconomy.Simulation
         private readonly List<LedgerEntry> ledger = new List<LedgerEntry>();
         public IReadOnlyList<Resident> Residents { get; }
         public IReadOnlyList<LedgerEntry> Ledger { get; }
-        public long InitialMoney { get; }
+        public long InitialMoney { get; private set; }
         public long Tick { get; private set; }
 
         public Economy(IEnumerable<Resident> initialResidents)
@@ -174,6 +174,43 @@ namespace LivingEconomy.Simulation
             long total = 0;
             foreach (var resident in byId.Values) total = checked(total + resident.Money);
             return total;
+        }
+
+        internal void Restore(SaveData data)
+        {
+            if (data.Accounts == null || data.Accounts.Count != byId.Count || data.Ledger == null
+                || data.Tick < 0 || data.InitialMoney < 0) throw new ArgumentException("Invalid saved economy.");
+            var seen = new HashSet<string>();
+            long total = 0;
+            foreach (var saved in data.Accounts)
+            {
+                if (saved == null || saved.Id == null || !seen.Add(saved.Id) || !byId.TryGetValue(saved.Id, out var account)
+                    || saved.Name != account.Name || saved.Profession != (int)account.Profession
+                    || saved.Money < 0 || saved.Grain < 0 || saved.Bread < 0 || saved.Hunger < 0 || saved.Hunger > 100)
+                    throw new ArgumentException("Invalid saved account.");
+                total = checked(total + saved.Money);
+            }
+            if (total != data.InitialMoney) throw new ArgumentException("Saved money total does not match.");
+            long previousTick = 0;
+            for (int i = 0; i < data.Ledger.Count; i++)
+            {
+                var entry = data.Ledger[i];
+                if (entry == null || entry.Sequence != i + 1L || entry.Tick < previousTick || entry.Tick > data.Tick
+                    || string.IsNullOrWhiteSpace(entry.Kind) || string.IsNullOrWhiteSpace(entry.Reason)
+                    || (entry.Success && (entry.Amount < 0 || entry.Quantity < 0)))
+                    throw new ArgumentException("Invalid saved ledger.");
+                previousTick = entry.Tick;
+            }
+            foreach (var saved in data.Accounts)
+            {
+                var account = byId[saved.Id]; account.Money = saved.Money; account.Hunger = saved.Hunger;
+                account.SetStock(Good.Grain, saved.Grain); account.SetStock(Good.Bread, saved.Bread);
+            }
+            ledger.Clear();
+            foreach (var e in data.Ledger)
+                ledger.Add(new LedgerEntry(e.Sequence, e.Tick, e.Kind, e.From, e.To,
+                    e.Good == -1 ? (Good?)null : (Good)e.Good, e.Quantity, e.Amount, e.Success, e.Reason));
+            Tick = data.Tick; InitialMoney = data.InitialMoney;
         }
 
         private string ValidateParties(string from, string to, out Resident payer, out Resident receiver)

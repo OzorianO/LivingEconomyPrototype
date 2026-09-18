@@ -105,7 +105,42 @@ static class Program
             Check(staged.FinishDay() && !staged.FinishDay() && !staged.DayInProgress, "day closes once");
             Check(stagedEconomy.TotalMoney() == stagedEconomy.InitialMoney, "arrival money conserved");
         }
-        Console.WriteLine($"PASS: {count} assertions; 10000 trade ticks; baseline and crisis scenarios, 100 days each; staged arrivals.");
+        var savePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "LivingEconomy-check-" + Guid.NewGuid() + ".xml");
+        foreach (var saving in new[] { new DailySimulation(seed: 7), new DailySimulation(farmYield: 0), new DailySimulation(capital: 0) })
+        {
+            for (int day = 0; day < 10; day++) saving.Step();
+            SimulationSave.Write(savePath, saving);
+            var loaded = SimulationSave.Read(savePath);
+            Check(Snapshot(saving.Economy) == Snapshot(loaded.Economy) && loaded.Economy.Tick == 10, "disk restore accounts and day");
+            Check(saving.Farm.Money == loaded.Farm.Money && saving.Bakery.Money == loaded.Bakery.Money, "disk restore business balances");
+            Check(saving.Economy.Ledger.Count == loaded.Economy.Ledger.Count, "disk restore ledger count");
+            for (int i = 0; i < saving.Economy.Ledger.Count; i++)
+                Check(saving.Economy.Ledger[i].ToString() == loaded.Economy.Ledger[i].ToString(), "disk restore exact ledger");
+            for (int day = 0; day < 90; day++)
+            {
+                saving.Step(); loaded.Step();
+                Check(Snapshot(saving.Economy) == Snapshot(loaded.Economy), "loaded continuation equivalent");
+                Check(saving.Farm.Money == loaded.Farm.Money && saving.Bakery.Money == loaded.Bakery.Money
+                    && loaded.Economy.TotalMoney() == loaded.Economy.InitialMoney, "loaded continuation conserved");
+                for (int i = 0; i < 20; i++) Check(saving.Economy.Residents[i].Hunger == loaded.Economy.Residents[i].Hunger, "loaded hunger equivalent");
+            }
+            var damaged = saving.Capture(); damaged.Accounts[0].Money++;
+            bool refused = false;
+            try { DailySimulation.FromSave(damaged); } catch (ArgumentException) { refused = true; }
+            Check(refused, "damaged money total refused");
+            damaged = saving.Capture(); damaged.Version = 99; refused = false;
+            try { DailySimulation.FromSave(damaged); } catch (ArgumentException) { refused = true; }
+            Check(refused, "unknown save version refused");
+            saving.BeginDay(); refused = false;
+            try { SimulationSave.Write(savePath, saving); } catch (InvalidOperationException) { refused = true; }
+            Check(refused && SimulationSave.Read(savePath).Economy.Tick == 10, "midday save refused and existing save preserved");
+        }
+        System.IO.File.WriteAllText(savePath, "broken xml");
+        bool malformed = false;
+        try { SimulationSave.Read(savePath); } catch (InvalidOperationException) { malformed = true; }
+        Check(malformed, "malformed file refused");
+        System.IO.File.Delete(savePath); System.IO.File.Delete(savePath + ".bak");
+        Console.WriteLine($"PASS: {count} assertions; trade, arrival and disk save/load checks with 100-day continuations.");
     }
     static string Snapshot(Economy e)
     {

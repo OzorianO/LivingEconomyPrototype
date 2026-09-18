@@ -10,6 +10,8 @@ namespace LivingEconomy.Presentation
         private Vector2 scroll;
         private SettlementView settlement;
         private bool autoDays;
+        private string saveMessage = "Save / Load available when everyone is home.";
+        private string SavePath => System.IO.Path.Combine(Application.persistentDataPath, "Saves", "settlement.xml");
         private void Update()
         {
             if (autoDays && !settlement.Walking && !settlement.Paused) AdvanceDay();
@@ -57,6 +59,21 @@ namespace LivingEconomy.Presentation
             settlement.Paused = GUILayout.Toggle(settlement.Paused, "Pause walking");
             GUILayout.EndHorizontal();
             GUILayout.Label("Route: " + settlement.Activity);
+            GUILayout.BeginHorizontal();
+            GUI.enabled = !simulation.DayInProgress && !autoDays;
+            if (GUILayout.Button("Save"))
+            {
+                try { SimulationSave.Write(SavePath, simulation); saveMessage = "Saved day " + simulation.Economy.Tick; }
+                catch (System.Exception e) { saveMessage = "Save failed: " + e.Message; }
+            }
+            if (GUILayout.Button("Load"))
+            {
+                try { var loaded = SimulationSave.Read(SavePath); ResetScenario(loaded); saveMessage = "Loaded day " + loaded.Economy.Tick; }
+                catch (System.Exception e) { saveMessage = "Load failed: " + e.Message; }
+            }
+            GUI.enabled = true;
+            GUILayout.EndHorizontal();
+            GUILayout.Label(saveMessage);
             GUILayout.Label("Work arrival: wages. Bakery arrival: purchase. Home arrival: meal.");
             settlement.DrawSelection();
             scroll = GUILayout.BeginScrollView(scroll);
