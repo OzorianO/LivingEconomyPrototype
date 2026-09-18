@@ -140,6 +140,47 @@ static class Program
         try { SimulationSave.Read(savePath); } catch (InvalidOperationException) { malformed = true; }
         Check(malformed, "malformed file refused");
         System.IO.File.Delete(savePath); System.IO.File.Delete(savePath + ".bak");
+        var employment = new DailySimulation();
+        long employmentMoney = employment.Economy.TotalMoney();
+        Check(!employment.AssignJob("npc-01", "bakery", out var reason) && reason == "No vacancy.", "full employer rejects switch");
+        Check(employment.EmployerOf("npc-01") == "farm", "failed switch keeps old job");
+        Check(!employment.AssignJob("npc-00", "bakery", out _), "owner cannot take employee vacancy");
+        Check(!employment.AssignJob("missing", null, out _), "unknown resident rejected");
+        Check(!employment.AssignJob("npc-01", "missing", out _), "unknown business rejected");
+        Check(employment.AssignJob("npc-11", null, out _), "resignation creates vacancy");
+        Check(employment.AssignJob("npc-01", "bakery", out _), "atomic switch to vacancy");
+        Check(employment.AssignJob("npc-11", "farm", out _), "vacated farm job filled");
+        Check(!employment.AssignJob("npc-12", "farm", out _), "last vacancy cannot be double filled");
+        Check(employment.AssignJob("npc-02", null, out _), "unemployment supported");
+        Check(employment.Economy.TotalMoney() == employmentMoney, "employment never creates money");
+        var jobSave = employment.Capture();
+        SimulationSave.Write(savePath, employment);
+        var loadedEmployment = SimulationSave.Read(savePath);
+        System.IO.File.Delete(savePath);
+        Check(loadedEmployment.EmployerOf("npc-01") == "bakery" && loadedEmployment.EmployerOf("npc-02") == null, "changed and missing jobs restored");
+        for (int day = 0; day < 100; day++)
+        {
+            employment.Step(); loadedEmployment.Step();
+            Check(!employment.DayInProgress && employment.Economy.TotalMoney() == employmentMoney, "unemployed does not block day or create money");
+            Check(Snapshot(employment.Economy) == Snapshot(loadedEmployment.Economy), "changed jobs save continuation matches");
+        }
+        employment.BeginDay();
+        Check(!employment.AssignJob("npc-03", null, out _), "midday job changes refused");
+        var legacy = new DailySimulation().Capture(); legacy.Version = 1; legacy.Businesses.Clear();
+        foreach (var legacyAccount in legacy.Accounts)
+            if (legacyAccount.Id == "farm") legacyAccount.Name = "Farm (owner npc-00)";
+            else if (legacyAccount.Id == "bakery") legacyAccount.Name = "Bakery (owner npc-06)";
+        Check(DailySimulation.FromSave(legacy).Jobs.Count == 18, "legacy v1 migration");
+        var alternate = new DailySimulation(businesses: new[] {
+            new BusinessDefinition("farm", "npc-03", 8, 5), new BusinessDefinition("bakery", "npc-12", 7, 7) });
+        Check(alternate.IsOwner("npc-03") && alternate.Jobs.Count == 15, "scenario owners capacities wages are data");
+        var alternateLoaded = DailySimulation.FromSave(alternate.Capture());
+        alternate.Step(); alternateLoaded.Step();
+        Check(Snapshot(alternate.Economy) == Snapshot(alternateLoaded.Economy), "custom business rules saved");
+        var invalidJobSave = new DailySimulation().Capture(); invalidJobSave.Jobs[0].Employer = "missing";
+        bool invalidJob = false;
+        try { DailySimulation.FromSave(invalidJobSave); } catch (ArgumentException) { invalidJob = true; }
+        Check(invalidJob, "invalid saved employer rejected");
         Console.WriteLine($"PASS: {count} assertions; trade, arrival and disk save/load checks with 100-day continuations.");
     }
     static string Snapshot(Economy e)

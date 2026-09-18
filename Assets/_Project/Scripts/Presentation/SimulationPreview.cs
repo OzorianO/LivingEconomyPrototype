@@ -40,8 +40,8 @@ namespace LivingEconomy.Presentation
             var economy = simulation.Economy;
             GUILayout.BeginArea(Panel, GUI.skin.box);
             GUILayout.Label("Living Economy — daily simulation");
-            GUILayout.Label($"Day {economy.Tick} | NPC: 20 | Coins: {economy.TotalMoney()} / {economy.InitialMoney}");
-            GUILayout.Label($"{(simulation.DayInProgress ? "Current" : "Completed")} day: paid {simulation.LastPaid}/18 | fed {simulation.LastFed}/20 | bread produced {simulation.LastBread}");
+            GUILayout.Label($"Day {economy.Tick} | NPC: {economy.Residents.Count} | Coins: {economy.TotalMoney()} / {economy.InitialMoney}");
+            GUILayout.Label($"{(simulation.DayInProgress ? "Current" : "Completed")} day: paid {simulation.LastPaid}/{simulation.Jobs.Count} | fed {simulation.LastFed}/{economy.Residents.Count} | bread produced {simulation.LastBread}");
             GUILayout.Label("Click a resident, farm or bakery on the map to inspect it.");
             GUILayout.BeginHorizontal();
             GUI.enabled = !settlement.Walking && !autoDays;
@@ -73,15 +73,16 @@ namespace LivingEconomy.Presentation
             }
             GUI.enabled = true;
             GUILayout.EndHorizontal();
+            scroll = GUILayout.BeginScrollView(scroll);
             GUILayout.Label(saveMessage);
             GUILayout.Label("Work arrival: wages. Bakery arrival: purchase. Home arrival: meal.");
             settlement.DrawSelection();
-            scroll = GUILayout.BeginScrollView(scroll);
+
             foreach (var business in new[] { simulation.Farm, simulation.Bakery })
                 GUILayout.Label($"{business.Name}: coins={business.Money}, grain={business.Stock(Good.Grain)}, bread={business.Stock(Good.Bread)}");
             foreach (var npc in simulation.Economy.Residents)
             {
-                string job = simulation.Jobs.TryGetValue(npc.Id, out var employer) ? employer : "owner";
+                string job = simulation.Jobs.TryGetValue(npc.Id, out var employer) ? employer : simulation.IsOwner(npc.Id) ? "owner" : "unemployed";
                 GUILayout.Label($"{npc.Name} | job={job} | coins={npc.Money} | bread={npc.Stock(Good.Bread)} | hunger={npc.Hunger}");
             }
             GUILayout.Space(12);

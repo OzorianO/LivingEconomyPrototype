@@ -63,7 +63,7 @@ namespace LivingEconomy.Presentation
             int farmIndex = 0, bakeryIndex = 0;
             foreach (var npc in preview.Simulation.Economy.Residents)
             {
-                bool farm = npc.Id == "npc-00" || (preview.Simulation.Jobs.TryGetValue(npc.Id, out var job) && job == "farm");
+                bool farm = preview.Simulation.EmployerOf(npc.Id) == preview.Simulation.Farm.Id;
                 int index = farm ? farmIndex++ : bakeryIndex++;
                 float x = (farm ? -7 : 7) + (index % 5 - 2) * 1.15f;
                 var person = Shape(npc.Name, PrimitiveType.Capsule, new Vector3(x, 0.8f, 1.8f + index / 5 * 1.5f),
@@ -107,7 +107,7 @@ namespace LivingEconomy.Presentation
             mapCamera.rect = new Rect(left, 0, 1 - left, 1);
             foreach (var npc in preview.Simulation.Economy.Residents)
             {
-                bool farm = npc.Id == "npc-00" || (preview.Simulation.Jobs.TryGetValue(npc.Id, out var job) && job == "farm");
+                bool farm = preview.Simulation.EmployerOf(npc.Id) == preview.Simulation.Farm.Id;
                 people[npc.Id].sharedMaterial = npc.Hunger > 0 ? hungryColor : farm ? farmerColor : bakerColor;
             }
             if (selectedId != null && people.TryGetValue(selectedId, out var selectedPerson))
@@ -134,8 +134,28 @@ namespace LivingEconomy.Presentation
             GUILayout.Label("Selected: " + selected.Name);
             GUILayout.Label($"Coins: {selected.Money} | grain: {selected.Stock(Good.Grain)} | bread: {selected.Stock(Good.Bread)}");
             if (selectedId.StartsWith("npc-"))
-                GUILayout.Label($"Job: {(preview.Simulation.Jobs.TryGetValue(selectedId, out var job) ? job : "owner")} | hunger: {selected.Hunger}/100");
-            else GUILayout.Label("Owner: " + (selectedId == "farm" ? "Марек" : "Данило") + " | Employees: 9");
+                GUILayout.Label($"Job: {(preview.Simulation.Jobs.TryGetValue(selectedId, out var job) ? job : preview.Simulation.IsOwner(selectedId) ? "owner" : "unemployed")} | hunger: {selected.Hunger}/100");
+                        else
+            {
+                var business = preview.Simulation.Business(selectedId);
+                GUILayout.Label($"Owner: {business.Owner} | Employees: {preview.Simulation.EmployeeCount(selectedId)}/{business.Capacity} | wage: {business.Wage}");
+            }
+            if (selectedId.StartsWith("npc-") && !preview.Simulation.IsOwner(selectedId))
+            {
+                GUI.enabled = !preview.Simulation.DayInProgress;
+                GUILayout.BeginHorizontal();
+                if (GUILayout.Button("Farm job")) ChangeJob("farm");
+                if (GUILayout.Button("Bakery job")) ChangeJob("bakery");
+                if (GUILayout.Button("Leave job")) ChangeJob(null);
+                GUILayout.EndHorizontal(); GUI.enabled = true;
+                if (jobMessage != null) GUILayout.Label(jobMessage);
+            }
+        }
+
+        private string jobMessage;
+        private void ChangeJob(string employer)
+        {
+            jobMessage = preview.Simulation.AssignJob(selectedId, employer, out var reason) ? "Job updated." : reason;
         }
 
         public void ResetWalking()
@@ -149,7 +169,19 @@ namespace LivingEconomy.Presentation
         public void BeginDay()
         {
             ResetWalking(); Walking = true;
-            foreach (var person in people) SetRoute(person.Key, workplaces[person.Key]);
+                        int index = 0;
+            foreach (var person in people)
+            {
+                string employer = preview.Simulation.EmployerOf(person.Key);
+                if (employer == null)
+                {
+                    preview.Simulation.ArriveAtWork(person.Key);
+                    continue;
+                }
+                bool farm = employer == preview.Simulation.Farm.Id;
+                workplaces[person.Key] = new Vector3((farm ? -7 : 7) + (index % 5 - 2) * 1.15f, 0.8f, 1.8f + index / 5 * 1.5f);
+                SetRoute(person.Key, workplaces[person.Key]); index++;
+            }
         }
         private void SetRoute(string id, Vector3 destination)
         {

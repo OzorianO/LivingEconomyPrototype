@@ -13,6 +13,7 @@ namespace LivingEconomy.Simulation
         public long Tick, InitialMoney, Reserve;
         public int FarmYield, LastPaid, LastFed, LastBread;
         public List<SavedAccount> Accounts = new List<SavedAccount>();
+        public List<SavedBusiness> Businesses = new List<SavedBusiness>();
         public List<SavedJob> Jobs = new List<SavedJob>();
         public List<SavedEntry> Ledger = new List<SavedEntry>();
     }
@@ -23,6 +24,8 @@ namespace LivingEconomy.Simulation
         public int Profession, Grain, Bread, Hunger;
         public long Money;
     }
+    [Serializable]
+    public sealed class SavedBusiness { public string Id, Owner; public int Capacity; public long Wage; }
     [Serializable]
     public sealed class SavedJob { public string Resident, Employer; }
     [Serializable]
