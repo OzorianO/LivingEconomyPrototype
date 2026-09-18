@@ -23,6 +23,10 @@ public static class BuildWindows
             options = BuildOptions.Development
         });
         string result = $"Windows build: {report.summary.result}; errors={report.summary.totalErrors}; warnings={report.summary.totalWarnings}; bytes={report.summary.totalSize}";
+        foreach (var step in report.steps)
+            foreach (var message in step.messages)
+                if (message.type == UnityEngine.LogType.Warning || message.type == UnityEngine.LogType.Error)
+                    result += $"\n{message.type}: {message.content}";
         File.WriteAllText("Builds/Windows/build-result.txt", result);
         if (report.summary.result != BuildResult.Succeeded) throw new Exception(result);
         UnityEngine.Debug.Log(result);
