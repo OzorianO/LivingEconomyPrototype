@@ -104,6 +104,28 @@ public static class ReloadLifecycleVerification
         Check(!hero.Exploring && camera.transform.position.y > 40, "overview mode restores settlement camera");
         Check(SimulationSave.ToXml(preview.Simulation) == beforeHero, "hero movement does not mutate the economy");
         hero.SetExploring(true);
+        var interaction = view.Interaction;
+        Check(interaction != null && !interaction.IsOpen && !interaction.TryOpen("missing") && !interaction.TryOpen("farm"), "interaction rejects unknown and distant targets");
+        cc.enabled = false; hero.transform.position = new Vector3(7, 0.08f, 2.8f); cc.enabled = true; Physics.SyncTransforms();
+        Check(interaction.TryOpen("bakery") && interaction.OpenedId == "bakery", "hero can inspect nearby bakery entrance");
+        float lockedX = hero.transform.position.x;
+        hero.MoveExplorer(Vector3.right, true, true, 0.05f);
+        Check(Mathf.Abs(hero.transform.position.x - lockedX) < 0.01f, "open interaction blocks hero movement");
+        interaction.Close();
+        cc.enabled = false; hero.transform.position = new Vector3(7, 0.08f, 6.4f); cc.enabled = true; Physics.SyncTransforms();
+        Check(!interaction.CanReach("bakery"), "building walls prevent interaction through them");
+        cc.enabled = false; hero.transform.position = new Vector3(-7, 0.08f, 2.8f); cc.enabled = true; Physics.SyncTransforms();
+        Check(interaction.TryOpen("farm"), "hero can inspect nearby farm entrance");
+        hero.SetExploring(false);
+        Check(!interaction.IsOpen, "overview mode closes interaction");
+        hero.SetExploring(true);
+        view.TryPersonPosition("npc-00", out var npcPoint);
+        cc.enabled = false; hero.transform.position = npcPoint + new Vector3(0, -0.72f, 1.2f); cc.enabled = true; Physics.SyncTransforms();
+        Check(interaction.TryOpen("npc-00"), "hero can open nearby resident information");
+        hero.TeleportToSpawn();
+        typeof(HeroInteraction).GetMethod("Update", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(interaction, null);
+        Check(!interaction.IsOpen, "out-of-range interaction closes");
+        Check(SimulationSave.ToXml(preview.Simulation) == beforeHero, "read-only interactions preserve all economy state");
         foreach (var point in new[] { new Vector3(-10.5f, 0, 11), new Vector3(10.8f, 0, -8.5f), Vector3.zero })
         {
             Check(terrain.GetComponent<MeshCollider>().Raycast(new Ray(point + Vector3.up * 10, Vector3.down), out var hit, 20)

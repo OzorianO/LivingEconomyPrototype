@@ -12,6 +12,16 @@ namespace LivingEconomy.Presentation
         private SimulationPreview preview;
         private Camera mapCamera;
         private IslandPlayer player;
+        private HeroInteraction interaction;
+        public HeroInteraction Interaction => interaction;
+        public bool InteractionOpen => interaction != null && interaction.IsOpen;
+        public void CloseInteraction() { if (interaction != null) interaction.Close(); }
+        public bool TryPersonPosition(string id, out Vector3 position)
+        {
+            if (id != null && people.TryGetValue(id, out var renderer) && renderer != null)
+            { position = renderer.transform.position; return true; }
+            position = Vector3.zero; return false;
+        }
         public IslandPlayer Player => player;
         [SerializeField, HideInInspector] private Vector3 cameraFocus = new Vector3(0, 0, 1);
         [SerializeField, HideInInspector] private float cameraYaw = -25, cameraPitch = 43, cameraDistance = 70;
@@ -126,6 +136,8 @@ namespace LivingEconomy.Presentation
             }
             player = hero.AddComponent<IslandPlayer>();
             player.Initialize(this, mapCamera, generatedRoot.Find("Island terrain").GetComponent<MeshCollider>(), legA, legB);
+            interaction = hero.AddComponent<HeroInteraction>();
+            interaction.Initialize(this, preview, mapCamera);
         }
 
         private void PlayerPart(Transform parent, string name, PrimitiveType type, Vector3 localPosition, Vector3 scale, Material material)
@@ -464,6 +476,7 @@ namespace LivingEconomy.Presentation
 
         public void ResetWalking()
         {
+            CloseInteraction();
             Walking = false; Paused = false; phase = 0;
             foreach (var person in people)
             {

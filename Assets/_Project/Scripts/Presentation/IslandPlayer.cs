@@ -29,6 +29,7 @@ namespace LivingEconomy.Presentation
         public void SetExploring(bool value)
         {
             Exploring = value;
+            if (settlement != null) settlement.CloseInteraction();
             if (!value && settlement != null) settlement.RestoreOverview();
         }
 
@@ -39,7 +40,7 @@ namespace LivingEconomy.Presentation
             if (keyboard != null && keyboard.tabKey.wasPressedThisFrame) SetExploring(!Exploring);
             if (!Exploring) return;
             var mouse = Mouse.current;
-            bool overMap = mouse != null && followCamera.pixelRect.Contains(mouse.position.ReadValue());
+            bool overMap = mouse != null && followCamera.pixelRect.Contains(mouse.position.ReadValue()) && !settlement.InteractionOpen;
             if (overMap && mouse.rightButton.isPressed)
             {
                 var delta = mouse.delta.ReadValue();
@@ -53,7 +54,7 @@ namespace LivingEconomy.Presentation
                 distance = Mathf.Clamp(distance * Mathf.Exp(-notches * 0.12f), 3, 10);
             }
             var input = Vector2.zero;
-            if (keyboard != null)
+            if (keyboard != null && !settlement.InteractionOpen)
             {
                 input.x = (keyboard.dKey.isPressed ? 1 : 0) - (keyboard.aKey.isPressed ? 1 : 0);
                 input.y = (keyboard.wKey.isPressed ? 1 : 0) - (keyboard.sKey.isPressed ? 1 : 0);
@@ -73,6 +74,7 @@ namespace LivingEconomy.Presentation
         public void MoveExplorer(Vector3 direction, bool running, bool jump, float dt)
         {
             if (controller == null || !Exploring || dt <= 0) return;
+            if (settlement != null && settlement.InteractionOpen) { direction = Vector3.zero; jump = false; }
             direction.y = 0; direction = Vector3.ClampMagnitude(direction, 1);
             var displacement = direction * (running ? 6 : 3.5f) * Mathf.Min(dt, 0.05f);
             if (!IsDryGround(transform.position + displacement + direction * controller.radius)) displacement = Vector3.zero;
@@ -118,7 +120,7 @@ namespace LivingEconomy.Presentation
             float x = followCamera.pixelRect.x + 10;
             float width = Mathf.Max(100, Mathf.Min(460, followCamera.pixelRect.width - 20));
             GUILayout.BeginArea(new Rect(x, 10, width, 100), GUI.skin.box);
-            GUILayout.Label(Exploring ? "HERO: WASD walk | Shift run | Space jump" : "ISLAND OVERVIEW");
+            GUILayout.Label(Exploring ? "HERO: WASD walk | Shift run | Space jump | E interact" : "ISLAND OVERVIEW");
             GUILayout.Label("Right drag: camera | Wheel: zoom | Tab: change mode");
             if (GUILayout.Button(Exploring ? "Return to island overview (Tab)" : "Control hero (Tab)")) SetExploring(!Exploring);
             GUILayout.EndArea();
