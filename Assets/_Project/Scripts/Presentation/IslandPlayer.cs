@@ -1,9 +1,10 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using LivingEconomy.Simulation;
 
 namespace LivingEconomy.Presentation
 {
-    // An explorer only: no wallet, employment or economic side effects.
+    // Movement/camera presentation; economic state belongs to the simulation.
     [DisallowMultipleComponent]
     public sealed class IslandPlayer : MonoBehaviour
     {
@@ -14,6 +15,9 @@ namespace LivingEconomy.Presentation
         private Transform leftLeg, rightLeg;
         private float yaw, pitch = 20, distance = 6, verticalSpeed, gait;
         public bool Exploring { get; private set; } = true;
+        public bool FirstPerson { get; private set; }
+        public bool LastPoseRestoreSafe { get; private set; } = true;
+        private Renderer[] bodyRenderers;
 
         public void Initialize(SettlementView view, Camera camera, MeshCollider terrain, Transform legA, Transform legB)
         {
@@ -24,13 +28,61 @@ namespace LivingEconomy.Presentation
             controller.center = Vector3.up * 0.9f;
             controller.stepOffset = 0.25f; controller.slopeLimit = 45;
             controller.skinWidth = 0.04f; controller.minMoveDistance = 0;
+            bodyRenderers = GetComponentsInChildren<Renderer>();
         }
 
         public void SetExploring(bool value)
         {
             Exploring = value;
+            RefreshBodyVisibility();
             if (settlement != null) settlement.CloseInteraction();
             if (!value && settlement != null) settlement.RestoreOverview();
+        }
+
+        public void SetFirstPerson(bool value)
+        {
+            FirstPerson = value;
+            pitch = Mathf.Clamp(pitch, value ? -75 : 8, value ? 75 : 65);
+            RefreshBodyVisibility();
+        }
+
+        private void RefreshBodyVisibility()
+        {
+            if (bodyRenderers != null)
+                foreach (var renderer in bodyRenderers) if (renderer != null) renderer.enabled = !Exploring || !FirstPerson;
+            if (followCamera != null) followCamera.nearClipPlane = Exploring && FirstPerson ? 0.05f : 0.25f;
+        }
+
+        private static float Rounded(float value) => Mathf.Round(value * 1000) / 1000;
+        public SavedHeroPose CapturePose() => new SavedHeroPose {
+            X = Rounded(transform.position.x), Y = Rounded(transform.position.y), Z = Rounded(transform.position.z),
+            FacingYaw = Mathf.Repeat(Rounded(transform.eulerAngles.y), 360),
+            CameraYaw = Mathf.Repeat(Rounded(yaw), 360), CameraPitch = Rounded(pitch),
+            CameraDistance = Rounded(distance), FirstPerson = FirstPerson };
+
+        public bool RestorePose(SavedHeroPose pose)
+        {
+            LastPoseRestoreSafe = true;
+            if (pose == null) pose = new SavedHeroPose { X = 0, Y = 0.08f, Z = -1.5f };
+            pose.Validate();
+            Physics.SyncTransforms();
+            var position = new Vector3(pose.X, pose.Y, pose.Z);
+            bool safe = ground != null && ground.Raycast(new Ray(new Vector3(position.x, 30, position.z), Vector3.down), out var groundHit, 40)
+                && groundHit.point.y >= -0.3f && position.y >= groundHit.point.y - 0.1f && position.y <= groundHit.point.y + 3;
+            if (safe)
+                foreach (var collider in Physics.OverlapCapsule(position + Vector3.up * 0.36f,
+                    position + Vector3.up * 1.48f, 0.30f, ~0, QueryTriggerInteraction.Ignore))
+                    if (collider != ground && !collider.transform.IsChildOf(transform) && !(collider is CapsuleCollider)) { safe = false; break; }
+            if (controller != null) controller.enabled = false;
+            if (safe) transform.SetPositionAndRotation(position, Quaternion.Euler(0, pose.FacingYaw, 0));
+            else TeleportToSpawn();
+            verticalSpeed = 0; gait = 0;
+            yaw = pose.CameraYaw; pitch = pose.CameraPitch; distance = pose.CameraDistance;
+            SetFirstPerson(pose.FirstPerson);
+            if (controller != null) controller.enabled = true;
+            LastPoseRestoreSafe = safe;
+            Physics.SyncTransforms();
+            return safe;
         }
 
         private void Update()
@@ -39,15 +91,16 @@ namespace LivingEconomy.Presentation
             var keyboard = Keyboard.current;
             if (keyboard != null && keyboard.tabKey.wasPressedThisFrame) SetExploring(!Exploring);
             if (!Exploring) return;
+            if (keyboard != null && keyboard.vKey.wasPressedThisFrame && !settlement.InteractionOpen) SetFirstPerson(!FirstPerson);
             var mouse = Mouse.current;
             bool overMap = mouse != null && followCamera.pixelRect.Contains(mouse.position.ReadValue()) && !settlement.InteractionOpen;
             if (overMap && mouse.rightButton.isPressed)
             {
                 var delta = mouse.delta.ReadValue();
                 yaw = Mathf.Repeat(yaw + delta.x * 0.2f, 360);
-                pitch = Mathf.Clamp(pitch - delta.y * 0.15f, 8, 65);
+                pitch = Mathf.Clamp(pitch - delta.y * 0.15f, FirstPerson ? -75 : 8, FirstPerson ? 75 : 65);
             }
-            if (overMap)
+            if (overMap && !FirstPerson)
             {
                 float scroll = mouse.scroll.ReadValue().y;
                 float notches = Mathf.Abs(scroll) >= 10 ? scroll / 120 : scroll;
@@ -104,6 +157,11 @@ namespace LivingEconomy.Presentation
         private void LateUpdate()
         {
             if (!Exploring || followCamera == null || controller == null) return;
+            if (FirstPerson)
+            {
+                followCamera.transform.SetPositionAndRotation(transform.position + Vector3.up * 1.6f, Quaternion.Euler(pitch, yaw, 0));
+                return;
+            }
             var focus = transform.position + Vector3.up * 1.35f;
             var rotation = Quaternion.Euler(pitch, yaw, 0);
             var offset = rotation * Vector3.back * distance;
@@ -121,7 +179,7 @@ namespace LivingEconomy.Presentation
             float width = Mathf.Max(100, Mathf.Min(460, followCamera.pixelRect.width - 20));
             GUILayout.BeginArea(new Rect(x, 10, width, 100), GUI.skin.box);
             GUILayout.Label(Exploring ? "HERO: WASD walk | Shift run | Space jump | E interact" : "ISLAND OVERVIEW");
-            GUILayout.Label("Right drag: camera | Wheel: zoom | Tab: change mode");
+            GUILayout.Label("Right drag: look | Wheel: third-person zoom | V: first/third | Tab: overview");
             if (GUILayout.Button(Exploring ? "Return to island overview (Tab)" : "Control hero (Tab)")) SetExploring(!Exploring);
             GUILayout.EndArea();
         }

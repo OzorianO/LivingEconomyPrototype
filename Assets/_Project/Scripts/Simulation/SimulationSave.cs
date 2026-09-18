@@ -18,6 +18,24 @@ namespace LivingEconomy.Simulation
         public List<SavedBusiness> Businesses = new List<SavedBusiness>();
         public List<SavedJob> Jobs = new List<SavedJob>();
         public List<SavedEntry> Ledger = new List<SavedEntry>();
+        public SavedHeroPose HeroPose;
+    }
+    [Serializable]
+    public sealed class SavedHeroPose
+    {
+        public float X, Y, Z, FacingYaw, CameraYaw, CameraPitch = 20, CameraDistance = 6;
+        public bool FirstPerson;
+        public SavedHeroPose Copy() => (SavedHeroPose)MemberwiseClone();
+        public void Validate()
+        {
+            foreach (float value in new[] { X, Y, Z, FacingYaw, CameraYaw, CameraPitch, CameraDistance })
+                if (float.IsNaN(value) || float.IsInfinity(value)) throw new ArgumentException("Non-finite hero pose.");
+            if (Math.Abs(X) > 100000 || Math.Abs(Y) > 100000 || Math.Abs(Z) > 100000
+                || FacingYaw < 0 || FacingYaw >= 360 || CameraYaw < 0 || CameraYaw >= 360
+                || CameraPitch < -75 || CameraPitch > 75 || CameraDistance < 3 || CameraDistance > 10
+                || (!FirstPerson && (CameraPitch < 8 || CameraPitch > 65)))
+                throw new ArgumentException("Invalid hero pose.");
+        }
     }
     [Serializable]
     public sealed class SavedAccount

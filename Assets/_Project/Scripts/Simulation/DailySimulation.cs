@@ -12,6 +12,13 @@ namespace LivingEconomy.Simulation
         public Resident Farm { get; }
         public Resident Bakery { get; }
         public Resident Hero { get; private set; }
+        private SavedHeroPose heroPose;
+        public SavedHeroPose HeroPose => heroPose?.Copy();
+        public void SetHeroPose(SavedHeroPose pose)
+        {
+            if (Hero == null || pose == null) throw new ArgumentException("Missing hero or pose.");
+            pose.Validate(); heroPose = pose.Copy();
+        }
         public Resident EnableHero()
         {
             if (Hero == null)
@@ -320,7 +327,8 @@ namespace LivingEconomy.Simulation
             foreach (var a in accounts)
                 data.Accounts.Add(new SavedAccount { Id = a.Id, Name = a.Name, Profession = (int)a.Profession,
                     Money = a.Money, Grain = a.Stock(Good.Grain), Bread = a.Stock(Good.Bread), Hunger = a.Hunger, Thirst = a.Thirst });
-            data.Version = Hero == null ? 3 : 4; data.AutoEmployment = AutoEmployment;
+            data.Version = Hero == null ? 3 : heroPose == null ? 4 : 5; data.AutoEmployment = AutoEmployment;
+            data.HeroPose = heroPose?.Copy();
             data.LastUnpaid = LastUnpaid; data.LastUnreachable = LastUnreachable;
             foreach (var b in Businesses) data.Businesses.Add(new SavedBusiness { Id = b.Id, Owner = b.Owner, Capacity = b.Capacity, Wage = b.Wage });
             foreach (var job in Jobs) data.Jobs.Add(new SavedJob { Resident = job.Key, Employer = job.Value });
@@ -333,7 +341,7 @@ namespace LivingEconomy.Simulation
 
         public static DailySimulation FromSave(SaveData data)
         {
-            if (data == null || (data.Version < 1 || data.Version > 4) || data.Jobs == null || data.LastPaid < 0 || data.LastPaid > 18
+            if (data == null || (data.Version < 1 || data.Version > 5) || data.Jobs == null || data.LastPaid < 0 || data.LastPaid > 18
                 || data.LastFed < 0 || data.LastFed > 20 || data.LastBread < 0 || data.LastBread > 40)
                 throw new ArgumentException("Unsupported or invalid save.");
             if (data.LastUnpaid < 0 || data.LastUnpaid > 18 || data.LastUnreachable < 0 || data.LastUnreachable > 60)
@@ -351,7 +359,13 @@ namespace LivingEconomy.Simulation
             }
             var restored = new DailySimulation(farmYield: data.FarmYield, capital: data.Reserve, businesses: definitions,
                 autoEmployment: data.Version >= 3 && data.AutoEmployment);
-            if (data.Version == 4) restored.EnableHero();
+            if (data.Version >= 4) restored.EnableHero();
+            if (data.Version == 5)
+            {
+                if (data.HeroPose == null) throw new ArgumentException("Missing v5 hero pose.");
+                restored.SetHeroPose(data.HeroPose);
+            }
+            else if (data.HeroPose != null) throw new ArgumentException("Hero pose requires v5.");
             var seen = new HashSet<string>();
             restored.jobs.Clear();
             foreach (var job in data.Jobs)

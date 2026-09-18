@@ -136,6 +136,7 @@ namespace LivingEconomy.Presentation
             player.Initialize(this, mapCamera, generatedRoot.Find("Island terrain").GetComponent<MeshCollider>(), legA, legB);
             interaction = hero.AddComponent<HeroInteraction>();
             interaction.Initialize(this, preview, mapCamera);
+            player.RestorePose(preview.Simulation.HeroPose);
         }
 
         private void PlayerPart(Transform parent, string name, PrimitiveType type, Vector3 localPosition, Vector3 scale, Material material)

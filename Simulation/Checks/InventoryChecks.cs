@@ -86,6 +86,7 @@ static class InventoryChecks
     static string State(ItemInventory inventory) => inventory.Quantity("grain") + ":" + inventory.Quantity("bread") + ":" + inventory.TotalQuantity + ":" + inventory.UsedSlots;
     static void HeroChecks(Action<bool, string> check)
     {
+        PoseChecks(check);
         var simulation = new DailySimulation();
         var hero = simulation.EnableHero();
         check(ReferenceEquals(hero, simulation.EnableHero()) && hero.Money == 0 && hero.Items.TotalQuantity == 0, "hero activation idempotent and empty");
@@ -148,6 +149,53 @@ static class InventoryChecks
         }
         finally { if (System.IO.File.Exists(path)) System.IO.File.Delete(path); }
     }
+    static void PoseChecks(Action<bool, string> check)
+    {
+        var demo = DailySimulation.HeroDemo();
+        var pose = new SavedHeroPose { X = 2, Y = 0.08f, Z = -2, FacingYaw = 90, CameraYaw = 135,
+            CameraPitch = -30, CameraDistance = 5, FirstPerson = true };
+        demo.SetHeroPose(pose); pose.X = 99;
+        check(demo.HeroPose.X == 2, "pose input copied");
+        var external = demo.HeroPose; external.X = 99;
+        check(demo.HeroPose.X == 2, "pose output copied");
+        var snapshot = demo.Capture(); snapshot.HeroPose.X = 99;
+        check(demo.HeroPose.X == 2, "captured pose copied");
+        string xml = SimulationSave.ToXml(demo);
+        var loaded = SimulationSave.FromXml(xml);
+        check(loaded.Capture().Version == 5 && loaded.HeroPose.X == 2 && loaded.HeroPose.CameraPitch == -30 && loaded.HeroPose.FirstPerson, "XML v5 position and camera roundtrip");
+        check(SimulationSave.ToXml(loaded) == xml && loaded.Hero.Money == 12, "pose save preserves exact state and wallet");
+        foreach (float bad in new[] { float.NaN, float.PositiveInfinity, float.NegativeInfinity, 100001f })
+        {
+            var invalid = loaded.HeroPose; invalid.X = bad;
+            Throws(() => loaded.SetHeroPose(invalid), check, "invalid position refused");
+            check(SimulationSave.ToXml(loaded) == xml, "invalid position update atomic");
+        }
+        var missing = demo.Capture(); missing.HeroPose = null;
+        Throws(() => DailySimulation.FromSave(missing), check, "missing v5 pose refused");
+        var wrongVersion = demo.Capture(); wrongVersion.Version = 4;
+        Throws(() => DailySimulation.FromSave(wrongVersion), check, "pose in wrong schema refused");
+        var invalidYaw = loaded.HeroPose; invalidYaw.CameraYaw = 360;
+        Throws(() => loaded.SetHeroPose(invalidYaw), check, "invalid camera yaw refused");
+        var invalidPitch = loaded.HeroPose; invalidPitch.CameraPitch = -76;
+        Throws(() => loaded.SetHeroPose(invalidPitch), check, "invalid first-person pitch refused");
+        invalidPitch = loaded.HeroPose; invalidPitch.FirstPerson = false;
+        Throws(() => loaded.SetHeroPose(invalidPitch), check, "invalid third-person pitch refused");
+        var invalidDistance = loaded.HeroPose; invalidDistance.CameraDistance = 2;
+        Throws(() => loaded.SetHeroPose(invalidDistance), check, "invalid distance refused");
+        var legacy = SimulationSave.FromXml(SimulationSave.ToXml(DailySimulation.HeroDemo()));
+        check(legacy.HeroPose == null && legacy.Hero.Money == 12, "v4 retains property without invented pose");
+        var checkpoint = new ReloadCheckpoint(); checkpoint.Remember(demo); demo.BeginDay();
+        var moved = demo.HeroPose; moved.X = 4; demo.SetHeroPose(moved); checkpoint.Remember(demo);
+        check(checkpoint.Restore().HeroPose.X == 2, "partial day checkpoint rolls pose back together with economy");
+        var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "pose-check-" + Guid.NewGuid() + ".xml");
+        try
+        {
+            SimulationSave.Write(path, loaded);
+            check(SimulationSave.Read(path).HeroPose.CameraYaw == 135, "pose disk save/load");
+        }
+        finally { if (System.IO.File.Exists(path)) System.IO.File.Delete(path); }
+    }
+
     static void CheckRejected(ItemInventory from, ItemInventory to, string id, int amount, bool access, Action<bool, string> check, string label)
     {
         string old = State(from) + "/" + State(to);

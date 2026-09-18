@@ -29,11 +29,18 @@ namespace LivingEconomy.Presentation
         private void AdvanceDay() { RememberCompletedDay(); simulation.BeginDay(); settlement.BeginDay(); }
         public void RememberCompletedDay()
         {
+            CaptureHeroPose();
             reloadCheckpoint.Remember(simulation);
+        }
+        private void CaptureHeroPose()
+        {
+            if (simulation?.Hero != null && settlement?.Player != null && settlement.IsInitialized)
+                simulation.SetHeroPose(settlement.Player.CapturePose());
         }
         private void ResetScenario(DailySimulation scenario)
         {
             autoDays = false; simulation = scenario; simulation.EnableHero(); settlement.ResetWalking();
+            settlement.CloseInteraction(); settlement.Player.RestorePose(simulation.HeroPose);
             settlement.ClearRouteTests();
             report = null;
             RememberCompletedDay();
@@ -66,7 +73,7 @@ namespace LivingEconomy.Presentation
         {
             autoDays = false;
             if (simulation == null || reloadCheckpoint == null) return;
-            try { reloadCheckpoint.Remember(simulation); }
+            try { CaptureHeroPose(); reloadCheckpoint.Remember(simulation); }
             catch (System.Exception e) { saveMessage = "Reload checkpoint failed: " + e.Message; }
         }
         private void StartFreshSession()
@@ -157,12 +164,13 @@ namespace LivingEconomy.Presentation
             GUI.enabled = !simulation.DayInProgress && !autoDays;
             if (GUILayout.Button("Save"))
             {
-                try { SimulationSave.Write(SavePath, simulation); saveMessage = "Saved day " + simulation.Economy.Tick; }
+                try { CaptureHeroPose(); SimulationSave.Write(SavePath, simulation); saveMessage = "Saved day " + simulation.Economy.Tick; }
                 catch (System.Exception e) { saveMessage = "Save failed: " + e.Message; }
             }
             if (GUILayout.Button("Load"))
             {
-                try { var loaded = SimulationSave.Read(SavePath); ResetScenario(loaded); saveMessage = "Loaded day " + loaded.Economy.Tick; }
+                try { var loaded = SimulationSave.Read(SavePath); ResetScenario(loaded); saveMessage = "Loaded day " + loaded.Economy.Tick
+                    + (settlement.Player.LastPoseRestoreSafe ? "" : ". Unsafe saved position; moved to spawn."); }
                 catch (System.Exception e) { saveMessage = "Load failed: " + e.Message; }
             }
             GUI.enabled = true;

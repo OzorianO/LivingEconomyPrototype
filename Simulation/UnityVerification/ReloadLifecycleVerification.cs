@@ -186,6 +186,45 @@ public static class ReloadLifecycleVerification
         Call(preview, "ResetScenario", SimulationSave.FromXml(original));
         player.SetExploring(false);
     }
+    private static void CheckHeroPose(SimulationPreview preview)
+    {
+        string original = SimulationSave.ToXml(preview.Simulation);
+        var view = preview.GetComponent<SettlementView>(); var player = view.Player;
+        var camera = (Camera)typeof(SettlementView).GetField("mapCamera", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(view);
+        var pose = new SavedHeroPose { X = 2, Y = 0.08f, Z = -2, FacingYaw = 90, CameraYaw = 135,
+            CameraPitch = -20, CameraDistance = 5, FirstPerson = true };
+        Check(player.RestorePose(pose), "valid dry pose restored without reset");
+        player.SetExploring(true);
+        typeof(IslandPlayer).GetMethod("LateUpdate", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(player, null);
+        Check(player.FirstPerson && Vector3.Distance(camera.transform.position, player.transform.position + Vector3.up * 1.6f) < 0.001f,
+            "first-person camera is at eye height");
+        Check(Mathf.Abs(camera.nearClipPlane - 0.05f) < 0.001f, "first-person uses a short near clip");
+        bool hidden = true; foreach (var renderer in player.GetComponentsInChildren<Renderer>()) hidden &= !renderer.enabled;
+        Check(hidden, "first-person hides own primitive body");
+        player.MoveExplorer(Vector3.right, false, false, 0.02f);
+        Check(player.transform.position.x > 2.05f, "first-person still uses collision controller movement");
+        preview.RememberCompletedDay(); string saved = SimulationSave.ToXml(preview.Simulation);
+        var expected = player.CapturePose();
+        player.TeleportToSpawn();
+        Call(preview, "ResetScenario", SimulationSave.FromXml(saved));
+        Check(Mathf.Abs(player.transform.position.x - expected.X) < 0.001f && player.FirstPerson
+            && Mathf.Abs(player.CapturePose().CameraYaw - 135) < 0.001f, "Load restores moved position and camera mode");
+        Check(SimulationSave.ToXml(preview.Simulation) == saved, "pose Load roundtrip has stable precision");
+        player.SetExploring(false);
+        bool visible = true; foreach (var renderer in player.GetComponentsInChildren<Renderer>()) visible &= renderer.enabled;
+        Check(visible && Mathf.Abs(camera.nearClipPlane - 0.25f) < 0.001f, "overview restores body and normal near clip");
+        player.SetExploring(true); player.SetFirstPerson(false);
+        Check(!player.FirstPerson && player.CapturePose().CameraPitch >= 8, "third-person mode clamps its pitch");
+        pose = player.CapturePose(); pose.X = 50;
+        Check(!player.RestorePose(pose) && !player.LastPoseRestoreSafe && player.transform.position.x == 0,
+            "saved pose over water falls back safely");
+        pose.X = 7; pose.Y = 0.08f; pose.Z = 5;
+        Check(!player.RestorePose(pose), "saved pose in building wall falls back safely");
+        long coins = preview.Simulation.Hero.Money;
+        Call(preview, "ResetScenario", SimulationSave.FromXml(original));
+        Check(preview.Simulation.Hero.Money == coins, "pose changes never create or lose hero money");
+        player.SetExploring(false);
+    }
     private static void Update()
     {
         if (!SessionState.GetBool(Prefix + "Running", false)) return;
@@ -254,7 +293,7 @@ public static class ReloadLifecycleVerification
             if (step == 5)
             {
                 if (!EditorApplication.isPlaying) return;
-                var preview = Preview(); CheckWorld(preview); CheckPresentation(preview); CheckHeroEconomy(preview);
+                var preview = Preview(); CheckWorld(preview); CheckPresentation(preview); CheckHeroEconomy(preview); CheckHeroPose(preview);
                 Check(preview.Simulation.Economy.Tick == 0, "second Play starts fresh without duplicate UI");
                 Call(preview, "ResetScenario", SimulationSave.FromXml(SessionState.GetString(Prefix + "Expected", "")));
                 Check(preview.Simulation.Economy.Tick == 5, "load after repeated Play restores snapshot");
