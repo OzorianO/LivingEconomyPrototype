@@ -13,8 +13,11 @@ namespace LivingEconomy.Presentation
         private Camera camera;
         private string openedId;
         private Vector2 scroll;
+        private Vector2 inventoryScroll;
+        private bool inventoryOpen;
         private string actionMessage = "Start with 0 coins. Hero economy demo is a separate test fixture.";
-        public bool IsOpen => openedId != null;
+        public bool IsOpen => openedId != null || inventoryOpen;
+        public bool InventoryOpen => inventoryOpen;
         public string OpenedId => openedId;
         public const float Reach = 3;
 
@@ -29,6 +32,7 @@ namespace LivingEconomy.Presentation
             var keyboard = Keyboard.current;
             if (keyboard == null) return;
             if (keyboard.escapeKey.wasPressedThisFrame) { Close(); return; }
+            if (keyboard.iKey.wasPressedThisFrame) { ToggleInventory(); return; }
             if (keyboard.eKey.wasPressedThisFrame)
             {
                 if (IsOpen) Close();
@@ -82,9 +86,15 @@ namespace LivingEconomy.Presentation
         public bool TryOpen(string id)
         {
             if (!CanReach(id)) return false;
-            openedId = id; scroll = Vector2.zero; return true;
+            inventoryOpen = false; openedId = id; scroll = Vector2.zero; return true;
         }
-        public void Close() { openedId = null; }
+        public void ToggleInventory()
+        {
+            inventoryOpen = !inventoryOpen;
+            openedId = null;
+            inventoryScroll = Vector2.zero;
+        }
+        public void Close() { openedId = null; inventoryOpen = false; }
 
         public bool BuyBread()
         {
@@ -154,14 +164,20 @@ namespace LivingEconomy.Presentation
             var hero = preview.Simulation.Hero;
             if (hero != null)
             {
-                GUILayout.BeginArea(new Rect(x, 115, width, 125), GUI.skin.box);
+                GUILayout.BeginArea(new Rect(x, 115, width, 155), GUI.skin.box);
                 GUILayout.Label($"Hero: {hero.Money} coins | Bread: {hero.Items.Quantity(ItemCatalog.BreadId)} | Grain: {hero.Items.Quantity(ItemCatalog.GrainId)} | Axe: {hero.Items.Quantity(ItemCatalog.AxeId)}");
                 GUILayout.Label($"Hunger: {hero.Hunger}/100 | Thirst: {hero.Thirst}/100 | Items: {hero.Items.TotalQuantity}/{hero.Items.Capacity}");
+                if (GUILayout.Button(inventoryOpen ? "Close inventory (I)" : "Inventory (I)")) ToggleInventory();
                 GUI.enabled = hero.Stock(Good.Bread) > 0;
                 if (GUILayout.Button("Eat 1 bread")) ConsumeBread();
                 GUI.enabled = true;
                 GUILayout.Label(actionMessage);
                 GUILayout.EndArea();
+            }
+            if (inventoryOpen)
+            {
+                DrawInventoryPanel(hero);
+                return;
             }
             if (!IsOpen)
             {
@@ -219,6 +235,44 @@ namespace LivingEconomy.Presentation
             GUILayout.EndScrollView();
             if (GUILayout.Button("Close (E / Escape)")) Close();
             GUILayout.EndArea();
+        }
+
+        private void DrawInventoryPanel(Resident hero)
+        {
+            float width = Mathf.Clamp(camera.pixelRect.width * 0.38f, 250, 360);
+            float height = Mathf.Min(410, Mathf.Max(220, Screen.height - 135));
+            float x = camera.pixelRect.xMax - width - 10;
+            GUILayout.BeginArea(new Rect(x, 115, width, height), GUI.skin.box);
+            GUILayout.Label("HERO INVENTORY");
+            GUILayout.Label($"Items: {hero.Items.TotalQuantity}/{hero.Items.Capacity} | Slots: {hero.Items.UsedSlots}/{hero.Items.SlotCapacity}");
+            inventoryScroll = GUILayout.BeginScrollView(inventoryScroll);
+            GUILayout.Label("Carried");
+            bool hasItems = false;
+            foreach (var entry in hero.Items.Catalog.Definitions)
+            {
+                int quantity = hero.Items.Quantity(entry.Key);
+                if (quantity <= 0) continue;
+                hasItems = true;
+                DrawInventoryEntry(entry.Value, quantity);
+            }
+            if (!hasItems) GUILayout.Label("Empty");
+            GUILayout.Label("Known item types");
+            foreach (var entry in hero.Items.Catalog.Definitions)
+                if (hero.Items.Quantity(entry.Key) == 0) DrawInventoryEntry(entry.Value, 0);
+            GUILayout.EndScrollView();
+            GUILayout.Label("Items enter here through harvesting, crafting, buying and looting.");
+            if (GUILayout.Button("Close (I / Escape)")) Close();
+            GUILayout.EndArea();
+        }
+
+        private static void DrawInventoryEntry(ItemDefinition item, int quantity)
+        {
+            GUILayout.BeginHorizontal(GUI.skin.box);
+            GUILayout.Label(item.Name, GUILayout.Width(120));
+            GUILayout.FlexibleSpace();
+            GUILayout.Label($"x {quantity}", GUILayout.Width(55));
+            GUILayout.EndHorizontal();
+            GUILayout.Label($"Stack: {item.MaxStack} | ID: {item.Id}");
         }
 
         private void DrawWorldActionPanel(float x, float width, Resident hero)

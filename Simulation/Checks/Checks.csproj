@@ -8,6 +8,7 @@
     <Compile Include="../../Assets/_Project/Scripts/Simulation/Economy.cs" />
     <Compile Include="../../Assets/_Project/Scripts/Simulation/ItemCatalog.cs" />
     <Compile Include="../../Assets/_Project/Scripts/Simulation/ItemInventory.cs" />
+    <Compile Include="../../Assets/_Project/Scripts/Simulation/ResourceGathering.cs" />
     <Compile Include="../../Assets/_Project/Scripts/Simulation/DailySimulation.cs" />
     <Compile Include="../../Assets/_Project/Scripts/Simulation/SimulationSave.cs" />
     <Compile Include="../../Assets/_Project/Scripts/Simulation/BusinessDefinition.cs" />

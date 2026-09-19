@@ -69,7 +69,7 @@ respawn — M3, спадкоємці — M10. Правило збереженн�
 - [x] Універсальні Recipe та атомарний Craft: Log → Plank / Firewood / Stick.
 - [x] Один action API та однакові перевірки для героя й тестового NPC.
 - [ ] Час дії, просте відновлення дерева та збереження resource nodes.
-- [ ] Представлення дерева/workstation у сцені й цільова Unity-регресія.
+- [x] Представлення дерева/workstation у сцені й цільова Unity-регресія; великий Terrain виправлено для Windows Player.
 
 M2: Tree → Log → Plank / Firewood / Stick; один і той самий ресурсний ланцюг
 проходять герой і тестовий NPC. Далі порядок M3–M12 визначає ROADMAP.md.

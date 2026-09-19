@@ -29,6 +29,19 @@ namespace LivingEconomy.Presentation
             {
                 var island = Object.Instantiate(preparedIsland, generatedRoot, false);
                 island.name = "Medieval Island";
+                var terrain = island.GetComponentInChildren<Terrain>();
+                if (terrain != null)
+                {
+                    terrain.drawInstanced = false;
+                    var terrainShader = Shader.Find("Universal Render Pipeline/Terrain/Lit");
+                    if (terrainShader != null)
+                    {
+                        var terrainMaterial = new Material(terrainShader) { hideFlags = HideFlags.DontSave };
+                        terrain.materialTemplate = terrainMaterial;
+                        materials.Add(terrainMaterial);
+                    }
+                    Debug.Log($"World presentation: prepared terrain active; shader={(terrain.materialTemplate == null ? "none" : terrain.materialTemplate.shader.name)}");
+                }
                 Ground = island.GetComponentInChildren<Collider>();
                 var waterMarker = island.transform.Find("Water level");
                 if (Ground == null || waterMarker == null) throw new System.InvalidOperationException("Prepared island is incomplete.");
