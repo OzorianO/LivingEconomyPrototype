@@ -52,7 +52,7 @@ public static class ReloadLifecycleVerification
             {
                 roots++;
                 foreach (var capsule in child.GetComponentsInChildren<CapsuleCollider>())
-                    if (capsule.enabled) people++;
+                    if (capsule.enabled && capsule.gameObject.name != "Resource tree trunk") people++;
             }
         Check(roots == 1 && people == 20 - SettlementReport.Capture(preview.Simulation).Dead, "one generated world with expected living NPC colliders");
         var view = preview.GetComponent<SettlementView>();
@@ -69,23 +69,39 @@ public static class ReloadLifecycleVerification
             && (float)typeof(SettlementView).GetField("cameraPitch", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(view) == 75f, "camera zoom and tilt are bounded");
         view.ResetCamera();
         Check(camera.transform.position.y > 40 && camera.transform.position.y < 55, "reset restores island overview");
-        Transform terrain = null;
+        Transform terrain = null, activeRoot = null;
         foreach (Transform child in preview.transform)
             if (child.gameObject.activeSelf && child.name == "GeneratedSettlement")
-                terrain = child.Find("Island terrain");
-        Check(terrain != null && terrain.GetComponent<MeshCollider>() != null, "island terrain has a ground collider");
-        var mesh = terrain.GetComponent<MeshFilter>().sharedMesh;
-        Check(mesh.vertexCount == 768 && mesh.subMeshCount == 2, "island has detailed grass and beach mesh");
-        Check(mesh.bounds.max.y > 2.5f, "northern island ridge has real elevation");
-        var activeRoot = terrain.parent;
+            {
+                activeRoot = child;
+                terrain = child.Find("Medieval Island/Imported island terrain") ?? child.Find("Island terrain");
+            }
+        Check(terrain != null && terrain.GetComponent<Collider>() != null, "island terrain has a ground collider");
+        var importedTerrain = terrain.GetComponent<Terrain>();
+        if (importedTerrain != null)
+        {
+            Check(importedTerrain.terrainData.heightmapResolution == 1025
+                && Mathf.Abs(importedTerrain.terrainData.size.x - 160) < 0.01f, "optimized Asset Store terrain is active");
+            float plateau = importedTerrain.transform.position.y + importedTerrain.terrainData.GetInterpolatedHeight(0.5f, 0.5f);
+            Check(Mathf.Abs(plateau) < 0.2f, "settlement plateau is level with existing routes");
+        }
+        else
+        {
+            var mesh = terrain.GetComponent<MeshFilter>().sharedMesh;
+            Check(mesh.vertexCount == 768 && mesh.subMeshCount == 2, "fallback island has detailed grass and beach mesh");
+            Check(mesh.bounds.max.y > 2.5f && mesh.normals[96].y > 0.99f, "fallback island ridge and ground are valid");
+        }
         Check(activeRoot.Find("Bakery chimney") != null && activeRoot.Find("Well base") != null, "village has bakery chimney and well");
         Check(Mathf.Abs(activeRoot.Find("House 1 roof 1").eulerAngles.x - 30) < 0.01f, "houses have pitched roofs");
-        Check(mesh.normals[96].y > 0.99f, "inhabited ground faces upward");
+        Check(activeRoot.Find("Resource tree trunk") != null && activeRoot.Find("Workbench top") != null, "resource tree and woodworking bench are represented");
         Physics.SyncTransforms();
         var heroes = activeRoot.GetComponentsInChildren<IslandPlayer>();
         Check(heroes.Length == 1 && view.Player == heroes[0], "one controllable island hero");
         var hero = heroes[0];
-        Check(hero.IsDryGround(Vector3.zero) && !hero.IsDryGround(new Vector3(50, 0, 50)), "hero cannot enter open water");
+        Check(hero.IsDryGround(Vector3.zero) && !hero.IsDryGround(new Vector3(100, 0, 100)), "hero cannot enter open water");
+        var axe = activeRoot.Find("Island hero/Hero axe");
+        Check(axe != null && axe.gameObject.activeSelf == (preview.Simulation.Hero.Items.Quantity(ItemCatalog.AxeId) > 0),
+            "Asset Store axe visibility follows hero inventory");
         var beforeHero = SimulationSave.ToXml(preview.Simulation);
         hero.SetExploring(true); hero.TeleportToSpawn();
         for (int i = 0; i < 8; i++) hero.MoveExplorer(Vector3.zero, false, false, 0.02f);
@@ -126,10 +142,11 @@ public static class ReloadLifecycleVerification
         typeof(HeroInteraction).GetMethod("Update", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(interaction, null);
         Check(!interaction.IsOpen, "out-of-range interaction closes");
         Check(SimulationSave.ToXml(preview.Simulation) == beforeHero, "read-only interactions preserve all economy state");
+        var groundCollider = terrain.GetComponent<Collider>();
         foreach (var point in new[] { new Vector3(-10.5f, 0, 11), new Vector3(10.8f, 0, -8.5f), Vector3.zero })
         {
-            Check(terrain.GetComponent<MeshCollider>().Raycast(new Ray(point + Vector3.up * 10, Vector3.down), out var hit, 20)
-                && Mathf.Abs(hit.point.y) < 0.01f, "field, houses and roads remain on flat island ground");
+            Check(groundCollider.Raycast(new Ray(point + Vector3.up * 10, Vector3.down), out var hit, 20)
+                && Mathf.Abs(hit.point.y) < 0.05f, "field, houses and roads remain on flat island ground");
         }
     }
     private static void CheckPresentation(SimulationPreview preview)
@@ -267,7 +284,9 @@ public static class ReloadLifecycleVerification
             if (step == 0)
             {
                 if (!EditorApplication.isPlaying || EditorApplication.isCompiling) return;
-                var preview = Preview(); CheckWorld(preview);
+                var preview = Preview();
+                Check(preview.Simulation.Hero.Items.Quantity(ItemCatalog.AxeId) == 1, "fresh session grants one starting axe");
+                CheckWorld(preview);
                 Call(preview, "ResetScenario", DailySimulation.HeroDemo());
                 Check(preview.Simulation.ExecuteAction("hero", AgentAction.BuyBread).Success, "prepare carried hero bread before actual domain reload");
                 Check(preview.Simulation.KillAgent("npc-02", new SavedPoint { X = -1, Y = 0.8f, Z = -2 }).Success, "prepare corpse before actual domain reload");

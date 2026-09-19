@@ -38,6 +38,7 @@ namespace LivingEconomy.Presentation
 
         private bool PositionOf(string id, out Vector3 point)
         {
+            if (view != null && view.TryWorldActionPosition(id, out point)) return true;
             if (id == "farm" || id == "bakery")
             { point = new Vector3(id == "farm" ? -7 : 7, 0.8f, 3.5f); return true; }
             point = Vector3.zero;
@@ -65,6 +66,7 @@ namespace LivingEconomy.Presentation
             if (preview == null || preview.Simulation == null || view == null || view.Player == null) return null;
             string best = null; float bestDistance = float.PositiveInfinity;
             Consider("farm", ref best, ref bestDistance); Consider("bakery", ref best, ref bestDistance);
+            Consider("tree-01", ref best, ref bestDistance); Consider(RecipeCatalog.WorkbenchId, ref best, ref bestDistance);
             foreach (var npc in preview.Simulation.Economy.Residents) Consider(npc.Id, ref best, ref bestDistance);
             return best;
         }
@@ -95,6 +97,24 @@ namespace LivingEconomy.Presentation
         {
             if (view == null || view.Player == null || !view.Player.Exploring || preview?.Simulation?.Hero == null) return false;
             return Perform(AgentAction.ConsumeBread);
+        }
+
+        public bool HarvestTree()
+        {
+            if (openedId != "tree-01" || !CanReach(openedId) || preview?.Simulation?.Hero == null) return false;
+            var result = preview.Simulation.ExecuteWorldAction(preview.Simulation.Hero.Id, WorldAction.Harvest, openedId);
+            actionMessage = result.Success ? "Collected 1 log." : result.Reason;
+            preview.RememberCompletedDay();
+            return result.Success;
+        }
+
+        public bool Craft(string recipeId)
+        {
+            if (openedId != RecipeCatalog.WorkbenchId || !CanReach(openedId) || preview?.Simulation?.Hero == null) return false;
+            var result = preview.Simulation.ExecuteWorldAction(preview.Simulation.Hero.Id, WorldAction.Craft, recipeId, openedId);
+            actionMessage = result.Success ? $"Crafted {result.Quantity} {result.ItemId}." : result.Reason;
+            preview.RememberCompletedDay();
+            return result.Success;
         }
 
         public bool Loot(Good? good, bool takeMoney)
@@ -135,7 +155,7 @@ namespace LivingEconomy.Presentation
             if (hero != null)
             {
                 GUILayout.BeginArea(new Rect(x, 115, width, 125), GUI.skin.box);
-                GUILayout.Label($"Hero: {hero.Money} coins | Bread: {hero.Items.Quantity(ItemCatalog.BreadId)} | Grain: {hero.Items.Quantity(ItemCatalog.GrainId)}");
+                GUILayout.Label($"Hero: {hero.Money} coins | Bread: {hero.Items.Quantity(ItemCatalog.BreadId)} | Grain: {hero.Items.Quantity(ItemCatalog.GrainId)} | Axe: {hero.Items.Quantity(ItemCatalog.AxeId)}");
                 GUILayout.Label($"Hunger: {hero.Hunger}/100 | Thirst: {hero.Thirst}/100 | Items: {hero.Items.TotalQuantity}/{hero.Items.Capacity}");
                 GUI.enabled = hero.Stock(Good.Bread) > 0;
                 if (GUILayout.Button("Eat 1 bread")) ConsumeBread();
@@ -146,9 +166,16 @@ namespace LivingEconomy.Presentation
             if (!IsOpen)
             {
                 var id = NearestId(); var account = Account(id);
-                if (account == null) return;
+                if (account == null && id != "tree-01" && id != RecipeCatalog.WorkbenchId) return;
                 var rect = new Rect(x, Mathf.Max(115, Screen.height - 70), width, 55);
-                if (GUI.Button(rect, "E: " + (account.IsDead ? "Loot body: " : id == "farm" || id == "bakery" ? "Inspect " : "Talk to ") + account.Name)) TryOpen(id);
+                string prompt = id == "tree-01" ? "E: Use resource tree" : id == RecipeCatalog.WorkbenchId ? "E: Use woodworking bench"
+                    : "E: " + (account.IsDead ? "Loot body: " : id == "farm" || id == "bakery" ? "Inspect " : "Talk to ") + account.Name;
+                if (GUI.Button(rect, prompt)) TryOpen(id);
+                return;
+            }
+            if (openedId == "tree-01" || openedId == RecipeCatalog.WorkbenchId)
+            {
+                DrawWorldActionPanel(x, width, hero);
                 return;
             }
             var selected = Account(openedId);
@@ -190,6 +217,30 @@ namespace LivingEconomy.Presentation
                 }
             }
             GUILayout.EndScrollView();
+            if (GUILayout.Button("Close (E / Escape)")) Close();
+            GUILayout.EndArea();
+        }
+
+        private void DrawWorldActionPanel(float x, float width, Resident hero)
+        {
+            float height = openedId == "tree-01" ? 185 : 260;
+            GUILayout.BeginArea(new Rect(x, Mathf.Max(115, Screen.height - height - 10), width, height), GUI.skin.box);
+            if (openedId == "tree-01")
+            {
+                var node = preview.Simulation.ResourceNodes[0];
+                GUILayout.Label($"Resource tree — logs remaining: {node.Available}/{node.Capacity}");
+                GUILayout.Label($"Axe required — carried: {hero.Items.Quantity(ItemCatalog.AxeId)}");
+                if (GUILayout.Button("Chop: collect 1 log")) HarvestTree();
+            }
+            else
+            {
+                GUILayout.Label("Woodworking bench");
+                GUILayout.Label($"Logs: {hero.Items.Quantity(ItemCatalog.LogId)} | Planks: {hero.Items.Quantity(ItemCatalog.PlankId)} | Firewood: {hero.Items.Quantity(ItemCatalog.FirewoodId)} | Sticks: {hero.Items.Quantity(ItemCatalog.StickId)}");
+                if (GUILayout.Button("1 Log → 4 Planks")) Craft(RecipeCatalog.PlanksId);
+                if (GUILayout.Button("1 Log → 4 Firewood")) Craft(RecipeCatalog.FirewoodId);
+                if (GUILayout.Button("1 Log → 6 Sticks")) Craft(RecipeCatalog.SticksId);
+            }
+            GUILayout.Label(actionMessage);
             if (GUILayout.Button("Close (E / Escape)")) Close();
             GUILayout.EndArea();
         }

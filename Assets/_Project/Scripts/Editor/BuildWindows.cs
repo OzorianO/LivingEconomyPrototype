@@ -13,7 +13,7 @@ public static class BuildWindows
         var scenes = EditorBuildSettings.scenes.Where(s => s.enabled).Select(s => s.path).ToArray();
         if (scenes.Length != 1 || scenes[0] != mainScene)
             throw new InvalidOperationException("Enable only MainSimulation in Build Settings before building.");
-        string output = Path.GetFullPath("Builds/Windows/LivingEconomyPrototype.exe");
+        string output = Path.GetFullPath("Builds/Windows/MedievalColony.exe");
         Directory.CreateDirectory(Path.GetDirectoryName(output));
         var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
         {

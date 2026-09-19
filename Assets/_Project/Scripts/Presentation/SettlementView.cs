@@ -28,9 +28,11 @@ namespace LivingEconomy.Presentation
         [SerializeField, HideInInspector] private float cameraYaw = -25, cameraPitch = 43, cameraDistance = 70;
         private readonly Dictionary<GameObject, string> targets = new Dictionary<GameObject, string>();
         private readonly Dictionary<string, Renderer> people = new Dictionary<string, Renderer>();
+        private readonly Dictionary<string, Vector3> worldActionPositions = new Dictionary<string, Vector3>();
         private readonly List<Material> materials = new List<Material>();
         private readonly List<Mesh> islandMeshes = new List<Mesh>();
         private GameObject marker;
+        private GameObject heroAxe;
         private Material farmerColor, bakerColor, hungryColor, unemployedColor, ownerColor;
         private IslandGenerator world;
         private readonly OverviewCameraController overview = new OverviewCameraController();
@@ -44,6 +46,7 @@ namespace LivingEconomy.Presentation
         public bool Walking => movement != null && movement.Walking;
         public bool Paused { get => movement != null && movement.Paused; set { if (movement != null) movement.Paused = value; } }
         public bool HasBlockedTargets => movement != null && movement.HasBlockedTargets;
+        public bool TryWorldActionPosition(string id, out Vector3 position) => worldActionPositions.TryGetValue(id, out position);
         public void ClearRouteTests() => movement?.ClearRouteTests();
         public string Activity => movement?.Activity ?? "Day complete";
 
@@ -52,7 +55,7 @@ namespace LivingEconomy.Presentation
             if (initialized && preview == source && generatedRoot != null) return;
             preview = source;
             ReleaseGeneratedWorld();
-            targets.Clear(); people.Clear(); homes.Clear(); workplaces.Clear();
+            targets.Clear(); people.Clear(); homes.Clear(); workplaces.Clear(); worldActionPositions.Clear();
             generatedRoot = new GameObject("GeneratedSettlement").transform;
             generatedRoot.SetParent(transform, false);
             world = new IslandGenerator(generatedRoot, materials, islandMeshes, targets);
@@ -92,6 +95,7 @@ namespace LivingEconomy.Presentation
                 world.Shape("Crop row", PrimitiveType.Cube, new Vector3(-7, 0.22f, 7.6f + row), new Vector3(6, 0.4f, 0.25f), wheat);
             for (int i = 0; i < 4; i++)
                 world.Building("House " + (i + 1), null, new Vector3(-9 + i * 6, 0, -7), plaster, roof);
+            BuildResourceArea(timber);
             int farmIndex = 0, bakeryIndex = 0;
             foreach (var npc in preview.Simulation.Economy.Residents)
             {
@@ -133,11 +137,34 @@ namespace LivingEconomy.Presentation
                 PlayerPart(pivot, "Hero leg " + side, PrimitiveType.Cube, new Vector3(0, -0.35f, 0), new Vector3(0.2f, 0.7f, 0.22f), trousers);
                 if (side < 0) legA = pivot; else legB = pivot;
             }
+            var axePrefab = Resources.Load<GameObject>("ThirdParty/BeginnerAxe/Prefabs/Axe");
+            if (axePrefab != null)
+            {
+                heroAxe = Instantiate(axePrefab, hero.transform, false);
+                heroAxe.name = "Hero axe";
+                heroAxe.transform.localPosition = new Vector3(0.5f, 0.95f, 0.12f);
+                heroAxe.transform.localRotation = Quaternion.Euler(90, 0, -8);
+                heroAxe.transform.localScale = Vector3.one * 1.1f;
+                foreach (var collider in heroAxe.GetComponentsInChildren<Collider>()) Destroy(collider);
+                RefreshHeroEquipment();
+            }
             player = hero.AddComponent<IslandPlayer>();
-            player.Initialize(this, mapCamera, generatedRoot.Find("Island terrain").GetComponent<MeshCollider>(), legA, legB);
+            player.Initialize(this, mapCamera, world.Ground, legA, legB);
             interaction = hero.AddComponent<HeroInteraction>();
             interaction.Initialize(this, preview, mapCamera);
             player.RestorePose(preview.Simulation.HeroPose);
+        }
+
+        private void BuildResourceArea(Material timber)
+        {
+            var leaves = world.ColorMaterial(new Color(0.14f, 0.34f, 0.16f));
+            world.Shape("Resource tree trunk", PrimitiveType.Cylinder, new Vector3(-15, 1.2f, -1.5f), new Vector3(0.65f, 1.2f, 0.65f), timber);
+            world.Shape("Resource tree crown", PrimitiveType.Sphere, new Vector3(-15, 3.4f, -1.5f), new Vector3(3.1f, 3.8f, 3.1f), leaves);
+            worldActionPositions.Add("tree-01", new Vector3(-15, 0.9f, 0.4f));
+            world.Shape("Workbench top", PrimitiveType.Cube, new Vector3(14, 0.9f, -1.5f), new Vector3(3.2f, 0.25f, 1.4f), timber);
+            for (int side = -1; side <= 1; side += 2)
+                world.Shape("Workbench leg", PrimitiveType.Cube, new Vector3(14 + side * 1.25f, 0.43f, -1.5f), new Vector3(0.22f, 0.85f, 1.1f), timber);
+            worldActionPositions.Add(RecipeCatalog.WorkbenchId, new Vector3(14, 0.9f, 0.1f));
         }
 
         private void PlayerPart(Transform parent, string name, PrimitiveType type, Vector3 localPosition, Vector3 scale, Material material)
@@ -147,6 +174,10 @@ namespace LivingEconomy.Presentation
         }
 
         public void RestoreOverview() => ApplyCameraPose();
+        public void RefreshHeroEquipment()
+        {
+            if (heroAxe != null) heroAxe.SetActive(preview?.Simulation?.Hero?.Items.Quantity(ItemCatalog.AxeId) > 0);
+        }
 
         public void ReleaseGeneratedWorld()
         {
@@ -165,7 +196,8 @@ namespace LivingEconomy.Presentation
                 {
                     foreach (var renderer in child.GetComponentsInChildren<Renderer>(true))
                         foreach (var material in renderer.sharedMaterials)
-                            if (material != null) ownedMaterials.Add(material);
+                            if (material != null && (materials.Contains(material) || (material.hideFlags & HideFlags.DontSave) != 0))
+                                ownedMaterials.Add(material);
                     foreach (var filter in child.GetComponentsInChildren<MeshFilter>(true))
                         if (filter.sharedMesh != null && (filter.sharedMesh.name.StartsWith("Generated ")
                             || filter.gameObject.name == "Island terrain" || filter.gameObject.name == "Coastal shallows"))
@@ -184,6 +216,7 @@ namespace LivingEconomy.Presentation
         {
             if (!initialized || preview == null || preview.Simulation == null || mapCamera == null) return;
             movement.AdvanceWalking();
+            RefreshHeroEquipment();
             // Reserve the left side for the panel, leaving the map centered in its own viewport.
             float left = Mathf.Clamp((preview.Panel.xMax + 12) / Mathf.Max(1, Screen.width), 0, 0.8f);
             mapCamera.rect = new Rect(left, 0, 1 - left, 1);

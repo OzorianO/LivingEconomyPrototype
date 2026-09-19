@@ -9,7 +9,7 @@ namespace LivingEconomy.Presentation
     public sealed class IslandPlayer : MonoBehaviour
     {
         private CharacterController controller;
-        private MeshCollider ground;
+        private Collider ground;
         private Camera followCamera;
         private SettlementView settlement;
         private Transform leftLeg, rightLeg;
@@ -19,7 +19,7 @@ namespace LivingEconomy.Presentation
         public bool LastPoseRestoreSafe { get; private set; } = true;
         private Renderer[] bodyRenderers;
 
-        public void Initialize(SettlementView view, Camera camera, MeshCollider terrain, Transform legA, Transform legB)
+        public void Initialize(SettlementView view, Camera camera, Collider terrain, Transform legA, Transform legB)
         {
             settlement = view; followCamera = camera; ground = terrain;
             leftLeg = legA; rightLeg = legB;

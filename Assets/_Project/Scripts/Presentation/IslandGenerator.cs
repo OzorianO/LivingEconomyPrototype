@@ -10,6 +10,8 @@ namespace LivingEconomy.Presentation
         private readonly List<Material> materials;
         private readonly List<Mesh> islandMeshes;
         private readonly Dictionary<GameObject, string> targets;
+        public Collider Ground { get; private set; }
+        public float WaterLevel { get; private set; } = -0.92f;
         public IslandGenerator(Transform root, List<Material> materials, List<Mesh> meshes, Dictionary<GameObject, string> targets)
         { generatedRoot = root; this.materials = materials; islandMeshes = meshes; this.targets = targets; }
 
@@ -22,6 +24,19 @@ namespace LivingEconomy.Presentation
             var shallows = ColorMaterial(new Color(0.15f, 0.57f, 0.62f));
             var leaves = ColorMaterial(new Color(0.18f, 0.38f, 0.21f));
             var stone = ColorMaterial(new Color(0.46f, 0.49f, 0.46f));
+            var preparedIsland = Resources.Load<GameObject>("World/MedievalIsland");
+            if (preparedIsland != null)
+            {
+                var island = Object.Instantiate(preparedIsland, generatedRoot, false);
+                island.name = "Medieval Island";
+                Ground = island.GetComponentInChildren<Collider>();
+                var waterMarker = island.transform.Find("Water level");
+                if (Ground == null || waterMarker == null) throw new System.InvalidOperationException("Prepared island is incomplete.");
+                WaterLevel = waterMarker.position.y;
+                Shape("Ocean", PrimitiveType.Cube, new Vector3(0, WaterLevel, 0), new Vector3(500, 0.1f, 500), sea);
+                BuildVillageDetails(timber, stone, leaves);
+                return;
+            }
             Shape("Ocean", PrimitiveType.Cube, new Vector3(0, -0.92f, 1), new Vector3(500, 0.1f, 500), sea);
             CreateIslandMesh("Island terrain", new[] { 0f, 0.35f, 0.55f, 0.66f, 0.74f, 0.85f, 0.94f, 1f },
                 new[] { 0f, 0f, 0f, 0f, 0f, -0.08f, -0.4f, -1.15f }, new[] { grass, sand }, true);
@@ -136,14 +151,18 @@ namespace LivingEconomy.Presentation
             var surface = new GameObject(name); surface.transform.SetParent(generatedRoot, false);
             surface.AddComponent<MeshFilter>().sharedMesh = mesh;
             surface.AddComponent<MeshRenderer>().sharedMaterials = palette;
-            if (collider) surface.AddComponent<MeshCollider>().sharedMesh = mesh;
+            if (collider)
+            {
+                var meshCollider = surface.AddComponent<MeshCollider>();
+                meshCollider.sharedMesh = mesh; Ground = meshCollider;
+            }
         }
 
         public Material ColorMaterial(Color color)
         {
             var template = Resources.Load<Material>("IslandSurface");
             if (template == null) throw new System.InvalidOperationException("Missing Resources/IslandSurface material.");
-            var material = new Material(template); material.color = color;
+            var material = new Material(template) { color = color, hideFlags = HideFlags.DontSave };
             materials.Add(material); return material;
         }
         public GameObject Shape(string name, PrimitiveType type, Vector3 position, Vector3 scale, Material material)

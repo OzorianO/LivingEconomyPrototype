@@ -319,6 +319,7 @@ namespace LivingEconomy.Simulation
                 || data.Tick < 0 || data.InitialMoney < 0) throw new ArgumentException("Invalid saved economy.");
             var seen = new HashSet<string>();
             long total = 0;
+            bool foundGenericItem = false;
             foreach (var saved in data.Accounts)
             {
                 if (saved == null || saved.Id == null || !seen.Add(saved.Id) || !byId.TryGetValue(saved.Id, out var account)
@@ -332,11 +333,30 @@ namespace LivingEconomy.Simulation
                 saved.DeathPoint?.Validate();
                 // Validate the combined capacity/slots before restoring any account.
                 var proposed = new ItemInventory(ItemCatalog.Prototype, account.Items.Capacity, account.Items.SlotCapacity);
-                if (saved.Grain > 0 && !proposed.TryAdd(ItemCatalog.GrainId, saved.Grain, out _)
-                    || saved.Bread > 0 && !proposed.TryAdd(ItemCatalog.BreadId, saved.Bread, out _))
-                    throw new ArgumentException("Invalid saved inventory capacity.");
+                if (data.Version >= 7)
+                {
+                    if (saved.Items == null) throw new ArgumentException("Missing v7 inventory.");
+                    var itemIds = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var item in saved.Items)
+                    {
+                        if (item == null || string.IsNullOrWhiteSpace(item.Id) || item.Quantity <= 0 || !itemIds.Add(item.Id)
+                            || !proposed.TryAdd(item.Id, item.Quantity, out _))
+                            throw new ArgumentException("Invalid saved item inventory.");
+                        if (item.Id != ItemCatalog.GrainId && item.Id != ItemCatalog.BreadId) foundGenericItem = true;
+                    }
+                    if (proposed.Quantity(ItemCatalog.GrainId) != saved.Grain || proposed.Quantity(ItemCatalog.BreadId) != saved.Bread)
+                        throw new ArgumentException("Legacy stock fields do not match v7 inventory.");
+                }
+                else
+                {
+                    if (saved.Items != null && saved.Items.Count != 0) throw new ArgumentException("Generic inventory requires v7.");
+                    if (saved.Grain > 0 && !proposed.TryAdd(ItemCatalog.GrainId, saved.Grain, out _)
+                        || saved.Bread > 0 && !proposed.TryAdd(ItemCatalog.BreadId, saved.Bread, out _))
+                        throw new ArgumentException("Invalid saved inventory capacity.");
+                }
                 total = checked(total + saved.Money);
             }
+            if (data.Version >= 7 && !foundGenericItem) throw new ArgumentException("v7 requires a generic item.");
             if (total != data.InitialMoney) throw new ArgumentException("Saved money total does not match.");
             long previousTick = 0;
             for (int i = 0; i < data.Ledger.Count; i++)
@@ -352,8 +372,13 @@ namespace LivingEconomy.Simulation
             {
                 var account = byId[saved.Id]; account.Money = saved.Money; account.Hunger = saved.Hunger; account.Thirst = saved.Thirst;
                 account.IsDead = saved.IsDead; account.deathPoint = saved.DeathPoint?.Copy();
-                account.SetStock(Good.Grain, 0); account.SetStock(Good.Bread, 0);
-                account.SetStock(Good.Grain, saved.Grain); account.SetStock(Good.Bread, saved.Bread);
+                foreach (var id in new List<string>(account.Items.Quantities.Keys)) account.Store.SetQuantity(id, 0);
+                if (data.Version >= 7)
+                    foreach (var item in saved.Items) account.Store.SetQuantity(item.Id, item.Quantity);
+                else
+                {
+                    account.SetStock(Good.Grain, saved.Grain); account.SetStock(Good.Bread, saved.Bread);
+                }
             }
             ledger.Clear();
             foreach (var e in data.Ledger)

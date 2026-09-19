@@ -12,6 +12,10 @@ namespace LivingEconomy.Simulation
         public Resident Farm { get; }
         public Resident Bakery { get; }
         public Resident Hero { get; private set; }
+        private readonly List<ResourceNode> resourceNodes = new List<ResourceNode>();
+        private readonly HashSet<string> workstationIds = new HashSet<string>(StringComparer.Ordinal) { RecipeCatalog.WorkbenchId };
+        public IReadOnlyList<ResourceNode> ResourceNodes { get; }
+        public bool HasWorkstation(string id) => id != null && workstationIds.Contains(id);
         public Resident Agent(string id) => id == null ? null : Hero?.Id == id ? Hero : FindResident(id);
         public bool BusinessActive(string id)
         {
@@ -34,6 +38,50 @@ namespace LivingEconomy.Simulation
         }
         public LedgerEntry Loot(string actorId, string corpseId, Good? good, int quantity, bool takeMoney, bool accessGranted)
             => Economy.Loot(actorId, corpseId, good, quantity, takeMoney, accessGranted);
+        public WorldActionResult ExecuteWorldAction(string actorId, WorldAction action, string targetId, string workstationId = null)
+        {
+            var actor = Agent(actorId);
+            string error = actor == null ? "Unknown agent" : !actor.CanOperate ? "Agent cannot act"
+                : DayInProgress ? "Wait until the day finishes" : null;
+            if (error != null) return new WorldActionResult(false, error, actorId, targetId, null, 0);
+            if (action == WorldAction.Harvest) return Harvest(actor, targetId);
+            if (action == WorldAction.Craft) return Craft(actor, targetId, workstationId);
+            return new WorldActionResult(false, "Unknown world action", actorId, targetId, null, 0);
+        }
+
+        private WorldActionResult Harvest(Resident actor, string nodeId)
+        {
+            var node = resourceNodes.Find(candidate => candidate.Id == nodeId);
+            string error = node == null ? "Unknown resource node"
+                : node.Available < node.HarvestAmount ? "Resource depleted"
+                : node.RequiredToolId != null && actor.Items.Quantity(node.RequiredToolId) == 0 ? "Required tool missing" : null;
+            if (error == null && !actor.Store.CanAdd(node.OutputItemId, node.HarvestAmount, out error)) { }
+            if (error != null) return new WorldActionResult(false, error, actor.Id, nodeId, node?.OutputItemId, 0);
+            node.Take(node.HarvestAmount); actor.Store.TryAdd(node.OutputItemId, node.HarvestAmount, out _);
+            Economy.Note("Harvest", actor.Id, nodeId, true, node.OutputItemId + " collected");
+            return new WorldActionResult(true, "Resource harvested", actor.Id, nodeId, node.OutputItemId, node.HarvestAmount);
+        }
+
+        private WorldActionResult Craft(Resident actor, string recipeId, string workstationId)
+        {
+            RecipeCatalog.TryGet(recipeId, out var recipe);
+            string error = recipe == null ? "Unknown recipe"
+                : workstationId != recipe.WorkstationId || !HasWorkstation(workstationId) ? "Required workstation missing"
+                : actor.Items.Quantity(recipe.InputItemId) < recipe.InputQuantity ? "Required ingredients missing" : null;
+            if (error == null)
+            {
+                var proposed = new ItemInventory(actor.Items.Catalog, actor.Items.Capacity, actor.Items.SlotCapacity);
+                foreach (var item in actor.Items.Quantities)
+                    if (!proposed.TryAdd(item.Key, item.Value, out error)) break;
+                if (error == null && !proposed.TryRemove(recipe.InputItemId, recipe.InputQuantity, out error)) { }
+                if (error == null && !proposed.TryAdd(recipe.OutputItemId, recipe.OutputQuantity, out error)) { }
+            }
+            if (error != null) return new WorldActionResult(false, error, actor.Id, recipeId, recipe?.OutputItemId, 0);
+            actor.Store.TryRemove(recipe.InputItemId, recipe.InputQuantity, out _);
+            actor.Store.TryAdd(recipe.OutputItemId, recipe.OutputQuantity, out _);
+            Economy.Note("Craft", actor.Id, recipe.Id, true, recipe.OutputItemId + " crafted");
+            return new WorldActionResult(true, "Recipe crafted", actor.Id, recipe.Id, recipe.OutputItemId, recipe.OutputQuantity);
+        }
         private SavedHeroPose heroPose;
         public SavedHeroPose HeroPose => heroPose?.Copy();
         public void SetHeroPose(SavedHeroPose pose)
@@ -91,6 +139,8 @@ namespace LivingEconomy.Simulation
         public DailySimulation(int seed = 42, int farmYield = 2, long capital = 120, IReadOnlyList<BusinessDefinition> businesses = null, bool autoEmployment = true)
         {
             AutoEmployment = autoEmployment;
+            ResourceNodes = resourceNodes.AsReadOnly();
+            resourceNodes.Add(new ResourceNode("tree-01", ItemCatalog.LogId, 4, 1, ItemCatalog.AxeId));
             if (farmYield < 0 || farmYield > 100 || capital < 0 || capital > 200) throw new ArgumentOutOfRangeException();
             this.farmYield = farmYield; reserve = capital;
             var definitions = new List<BusinessDefinition>(businesses ?? EmploymentScenario.Businesses());
@@ -361,12 +411,27 @@ namespace LivingEconomy.Simulation
                 FarmYield = farmYield, LastPaid = LastPaid, LastFed = LastFed, LastBread = LastBread };
             var accounts = new List<Resident>(Economy.Residents); accounts.Add(Farm); accounts.Add(Bakery);
             if (Hero != null) accounts.Add(Hero);
+            bool hasGenericItems = false;
             foreach (var a in accounts)
-                data.Accounts.Add(new SavedAccount { Id = a.Id, Name = a.Name, Profession = (int)a.Profession,
+            {
+                var saved = new SavedAccount { Id = a.Id, Name = a.Name, Profession = (int)a.Profession,
                     Money = a.Money, Grain = a.Stock(Good.Grain), Bread = a.Stock(Good.Bread), Hunger = a.Hunger, Thirst = a.Thirst,
-                    IsDead = a.IsDead, DeathPoint = a.DeathPoint });
+                    IsDead = a.IsDead, DeathPoint = a.DeathPoint };
+                foreach (var item in a.Items.Quantities)
+                    if (item.Key != ItemCatalog.GrainId && item.Key != ItemCatalog.BreadId) hasGenericItems = true;
+                data.Accounts.Add(saved);
+            }
             data.Version = Hero == null ? 3 : heroPose == null ? 4 : 5; data.AutoEmployment = AutoEmployment;
             foreach (var account in accounts) if (account.IsDead) data.Version = 6;
+            if (hasGenericItems)
+            {
+                data.Version = 7;
+                for (int i = 0; i < accounts.Count; i++)
+                {
+                    var ids = new List<string>(accounts[i].Items.Quantities.Keys); ids.Sort(StringComparer.Ordinal);
+                    foreach (var id in ids) data.Accounts[i].Items.Add(new SavedItem { Id = id, Quantity = accounts[i].Items.Quantity(id) });
+                }
+            }
             data.HeroEnabled = Hero != null;
             data.HeroPose = heroPose?.Copy();
             data.LastUnpaid = LastUnpaid; data.LastUnreachable = LastUnreachable;
@@ -381,7 +446,7 @@ namespace LivingEconomy.Simulation
 
         public static DailySimulation FromSave(SaveData data)
         {
-            if (data == null || (data.Version < 1 || data.Version > 6) || data.Jobs == null || data.LastPaid < 0 || data.LastPaid > 18
+            if (data == null || (data.Version < 1 || data.Version > 7) || data.Jobs == null || data.LastPaid < 0 || data.LastPaid > 18
                 || data.LastFed < 0 || data.LastFed > 20 || data.LastBread < 0 || data.LastBread > 40)
                 throw new ArgumentException("Unsupported or invalid save.");
             if (data.LastUnpaid < 0 || data.LastUnpaid > 18 || data.LastUnreachable < 0 || data.LastUnreachable > 60)
@@ -399,8 +464,8 @@ namespace LivingEconomy.Simulation
             }
             var restored = new DailySimulation(farmYield: data.FarmYield, capital: data.Reserve, businesses: definitions,
                 autoEmployment: data.Version >= 3 && data.AutoEmployment);
-            if ((data.Version >= 4 && data.Version <= 5) || (data.Version == 6 && data.HeroEnabled)) restored.EnableHero();
-            if (data.Version == 5 || (data.Version == 6 && data.HeroPose != null))
+            if ((data.Version >= 4 && data.Version <= 5) || (data.Version >= 6 && data.HeroEnabled)) restored.EnableHero();
+            if (data.Version == 5 || (data.Version >= 6 && data.HeroPose != null))
             {
                 if (data.HeroPose == null) throw new ArgumentException("Missing v5 hero pose.");
                 restored.SetHeroPose(data.HeroPose);
@@ -426,7 +491,7 @@ namespace LivingEconomy.Simulation
             if (data.Version < 6)
                 foreach (var account in data.Accounts) if (account.IsDead || account.DeathPoint != null)
                     throw new ArgumentException("Death state requires v6.");
-            if (data.Version == 6)
+            if (data.Version >= 6)
             {
                 foreach (var job in restored.jobs)
                     if (restored.Agent(job.Key).IsDead || !restored.BusinessActive(job.Value))

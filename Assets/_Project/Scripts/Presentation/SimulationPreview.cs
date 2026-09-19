@@ -21,6 +21,17 @@ namespace LivingEconomy.Presentation
         [System.NonSerialized] private string initializationError;
         private string saveMessage = "Save / Load available when everyone is home.";
         private string SavePath => System.IO.Path.Combine(Application.persistentDataPath, "Saves", "settlement.xml");
+        private string LegacySavePath
+        {
+            get
+            {
+                var companyDirectory = System.IO.Directory.GetParent(Application.persistentDataPath);
+                return companyDirectory == null ? SavePath
+                    : System.IO.Path.Combine(companyDirectory.FullName, "LivingEconomyPrototype", "Saves", "settlement.xml");
+            }
+        }
+        private string LoadPath => SimulationSave.ResolveReadPath(SavePath, LegacySavePath);
+        private bool HasLegacySave => !System.IO.File.Exists(SavePath) && LoadPath == LegacySavePath;
         private void Update()
         {
             if (!EnsureInitialized()) return;
@@ -39,7 +50,8 @@ namespace LivingEconomy.Presentation
         }
         private void ResetScenario(DailySimulation scenario)
         {
-            autoDays = false; simulation = scenario; simulation.EnableHero(); settlement.ResetWalking();
+            autoDays = false; simulation = scenario; EnableHeroWithStartingGear(simulation); settlement.ResetWalking();
+            settlement.RefreshHeroEquipment();
             settlement.CloseInteraction(); settlement.Player.RestorePose(simulation.HeroPose);
             settlement.ClearRouteTests();
             report = null;
@@ -96,7 +108,7 @@ namespace LivingEconomy.Presentation
                 bool restoring = simulation == null && reloadCheckpoint.HasSnapshot;
                 bool interrupted = reloadCheckpoint.Interrupted;
                 if (simulation == null) simulation = restoring ? reloadCheckpoint.Restore() : new DailySimulation();
-                simulation.EnableHero();
+                EnableHeroWithStartingGear(simulation);
                 settlement = GetComponent<SettlementView>();
                 if (settlement == null) settlement = gameObject.AddComponent<SettlementView>();
                 settlement.enabled = true;
@@ -108,6 +120,8 @@ namespace LivingEconomy.Presentation
                 if (restoring)
                     saveMessage = "UI restored at completed day " + simulation.Economy.Tick
                         + (interrupted ? ". Interrupted day rolled back; Next day restarts it." : ".") + " Auto days stopped.";
+                else if (HasLegacySave)
+                    saveMessage = "Legacy LivingEconomyPrototype save available. Load it, then Save to migrate it.";
                 return true;
             }
             catch (System.Exception e)
@@ -115,6 +129,13 @@ namespace LivingEconomy.Presentation
                 ready = false; autoDays = false; initializationError = e.Message;
                 return false;
             }
+        }
+        private static void EnableHeroWithStartingGear(DailySimulation scenario)
+        {
+            bool newHero = scenario.Hero == null;
+            var hero = scenario.EnableHero();
+            if (newHero && !hero.Store.TryAdd(ItemCatalog.AxeId, 1, out var reason))
+                throw new System.InvalidOperationException("Starting axe failed: " + reason);
         }
         private void OnGUI()
         {
@@ -178,7 +199,10 @@ namespace LivingEconomy.Presentation
             }
             if (GUILayout.Button("Load"))
             {
-                try { var loaded = SimulationSave.Read(SavePath); ResetScenario(loaded); saveMessage = "Loaded day " + loaded.Economy.Tick
+                string loadPath = LoadPath;
+                bool loadingLegacy = loadPath == LegacySavePath;
+                try { var loaded = SimulationSave.Read(loadPath); ResetScenario(loaded); saveMessage = "Loaded " + (loadingLegacy ? "legacy " : "") + "day " + loaded.Economy.Tick
+                    + (loadingLegacy ? ". Press Save to migrate it." : "")
                     + (settlement.Player.LastPoseRestoreSafe ? "" : ". Unsafe saved position; moved to spawn."); }
                 catch (System.Exception e) { saveMessage = "Load failed: " + e.Message; }
             }

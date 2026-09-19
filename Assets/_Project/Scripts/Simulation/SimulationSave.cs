@@ -58,7 +58,10 @@ namespace LivingEconomy.Simulation
         public long Money;
         public bool IsDead;
         public SavedPoint DeathPoint;
+        public List<SavedItem> Items = new List<SavedItem>();
     }
+    [Serializable]
+    public sealed class SavedItem { public string Id; public int Quantity; }
     [Serializable]
     public sealed class SavedBusiness { public string Id, Owner; public int Capacity; public long Wage; }
     [Serializable]
@@ -74,6 +77,15 @@ namespace LivingEconomy.Simulation
 
     public static class SimulationSave
     {
+        // A renamed product reads an old save only when no current save exists.
+        // It never copies, deletes, or silently bypasses a current (even invalid) save.
+        public static string ResolveReadPath(string primaryPath, string legacyPath)
+        {
+            if (string.IsNullOrWhiteSpace(primaryPath)) throw new ArgumentException("Missing primary save path.");
+            if (File.Exists(primaryPath) || string.IsNullOrWhiteSpace(legacyPath) || !File.Exists(legacyPath)) return primaryPath;
+            return legacyPath;
+        }
+
         public static string ToXml(DailySimulation simulation)
         {
             var data = simulation.Capture();

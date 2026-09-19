@@ -23,6 +23,11 @@ namespace LivingEconomy.Simulation
     {
         public const string GrainId = "grain";
         public const string BreadId = "bread";
+        public const string LogId = "log";
+        public const string PlankId = "plank";
+        public const string FirewoodId = "firewood";
+        public const string StickId = "stick";
+        public const string AxeId = "axe";
         private readonly Dictionary<string, ItemDefinition> definitions;
         public IReadOnlyDictionary<string, ItemDefinition> Definitions { get; }
 
@@ -30,7 +35,12 @@ namespace LivingEconomy.Simulation
         // finite-slot containers still use the same stack calculation and API.
         public static ItemCatalog Prototype { get; } = new ItemCatalog(new[] {
             new ItemDefinition(GrainId, "Grain", 100),
-            new ItemDefinition(BreadId, "Bread", 20) });
+            new ItemDefinition(BreadId, "Bread", 20),
+            new ItemDefinition(LogId, "Log", 10),
+            new ItemDefinition(PlankId, "Plank", 40),
+            new ItemDefinition(FirewoodId, "Firewood", 40),
+            new ItemDefinition(StickId, "Stick", 50),
+            new ItemDefinition(AxeId, "Axe", 1) });
 
         public ItemCatalog(IEnumerable<ItemDefinition> items)
         {
